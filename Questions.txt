@@ -1,0 +1,7 @@
+1. Run not on Landoop, but via REST + Kafka Connect from Binaries
+2. What happens if tasks.max = 2?
+3. Top 5 - needs to gather state across all instances of Kafka streams?
+- Yes, or just re-partition into a single topic by using groupBy(STATIC_KEY)
+4. Less hassle with custom serdes?
+TODO: schema registry?
+TODO: add compaction

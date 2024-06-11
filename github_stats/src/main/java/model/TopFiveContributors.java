@@ -1,8 +1,7 @@
-package topfive;
+package model;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.SneakyThrows;
-import model.ContributorWithCount;
 
 import java.util.ArrayList;
 import java.util.Comparator;

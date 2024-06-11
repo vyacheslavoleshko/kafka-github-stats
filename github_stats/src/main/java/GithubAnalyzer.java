@@ -1,10 +1,10 @@
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.Data;
-import lombok.Getter;
-import lombok.Setter;
 import lombok.SneakyThrows;
 import model.Contributor;
 import model.ContributorWithCount;
+import model.RepoStats;
+import serde.RepoStatsDeserializer;
+import serde.RepoStatsSerializer;
 import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
@@ -23,9 +23,9 @@ import org.apache.kafka.streams.kstream.Produced;
 import org.apache.kafka.streams.state.KeyValueStore;
 import serde.SimpleObjectDeserializer;
 import serde.SimpleObjectSerializer;
-import topfive.TopFiveContributors;
-import topfive.TopFiveDeserializer;
-import topfive.TopFiveSerializer;
+import model.TopFiveContributors;
+import serde.TopFiveDeserializer;
+import serde.TopFiveSerializer;
 
 import java.util.Properties;
 import java.util.logging.Logger;
@@ -39,10 +39,12 @@ public class GithubAnalyzer {
 
     public static final String INPUT_TOPIC = "github.commits";
     public static final String OUTPUT_TOPIC = "github.stats";
-
     private final static Serializer<TopFiveContributors> topFiveSerializer = new TopFiveSerializer();
     private final static Deserializer<TopFiveContributors> topFiveDeserializer = new TopFiveDeserializer();
-    private final static Serde<TopFiveContributors> topFiveSerde = Serdes.serdeFrom(topFiveSerializer, topFiveDeserializer);
+
+    private final static Serializer<RepoStats> repoStatsSerializer = new RepoStatsSerializer(topFiveSerializer);
+    private final static Deserializer<RepoStats> repoStatsDeserializer = new RepoStatsDeserializer(topFiveDeserializer);
+    private final static Serde<RepoStats> repoStatsSerde = Serdes.serdeFrom(repoStatsSerializer, repoStatsDeserializer);
 
     private final static Serializer<ContributorWithCount> contributorWithCountSerializer = new SimpleObjectSerializer<>();
     private final static Deserializer<ContributorWithCount> contributorWithCountDeserializer = new SimpleObjectDeserializer<>(ContributorWithCount.class);
@@ -65,9 +67,17 @@ public class GithubAnalyzer {
         p.setProperty(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
 
         KStream<String, String> commits = builder.stream(INPUT_TOPIC);
+        KTable<String, Long> totalCommits = commits.groupByKey().count();
+
         KTable<Contributor, Long> contributorCounts = commits
                 .groupBy(GithubAnalyzer::extractContributorFromCommit, Grouped.with(contributorSerde, Serdes.String()))
                 .count();
+        KTable<String, Long> totalUniqueCommitters =
+                contributorCounts
+                        .groupBy((contributor, commitCnt) -> KeyValue.pair(contributor.getRepo(), commitCnt),
+                                Grouped.with(Serdes.String(), Serdes.Long()))
+                        .count();
+
         contributorCounts
                 .mapValues((contributor, commitCount) ->
                         new ContributorWithCount(
@@ -81,19 +91,27 @@ public class GithubAnalyzer {
                                         contributorWithCount),
                         Grouped.with(Serdes.String(), contributorWithCountSerde))
                 .aggregate(
-                        TopFiveContributors::new,
+                        RepoStats::new,
                         (repo, contributorWithCount, agg) -> {
-                            agg.add(contributorWithCount);
+                            agg.getTopFiveContributors().add(contributorWithCount);
                             return agg;
                         },
                         (repo, contributorWithCount, agg) -> {
-                            agg.remove(contributorWithCount);
+                            agg.getTopFiveContributors().remove(contributorWithCount);
                             return agg;
-                        },
-                        Materialized.<String, TopFiveContributors, KeyValueStore<Bytes, byte[]>>as("top-5")
-                                .withKeySerde(Serdes.String())
-                                .withValueSerde(topFiveSerde)
-                ).toStream().to(OUTPUT_TOPIC, Produced.with(Serdes.String(), topFiveSerde));
+                        }, Materialized.with(Serdes.String(), repoStatsSerde)
+                )
+                .join(totalUniqueCommitters, (r, committersCnt) -> {
+                    r.setTotalCommitters(committersCnt);
+                    return r;
+                }, Materialized.with(Serdes.String(), repoStatsSerde))
+                .join(totalCommits, (r, commitsCnt) -> {
+                    r.setTotalCommits(commitsCnt);
+                    return r;
+                }, Materialized.<String, RepoStats, KeyValueStore<Bytes, byte[]>>as("top-5")
+                        .withKeySerde(Serdes.String())
+                        .withValueSerde(repoStatsSerde))
+                .toStream().to(OUTPUT_TOPIC, Produced.with(Serdes.String(), repoStatsSerde));
 
 
         StreamsConfig config = new StreamsConfig(p);

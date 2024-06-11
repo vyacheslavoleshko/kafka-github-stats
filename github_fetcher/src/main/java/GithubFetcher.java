@@ -63,6 +63,12 @@ public class GithubFetcher {
                         ProducerRecord<String, String> producerRecord = produceRecord(dummy);
                         producer.send(producerRecord);
                     }
+                            var rec1 = produceRecord2("sl@gmail.com");
+                            var rec2 = produceRecord2("lilya@gmail.com");
+                            var rec3 = produceRecord2("sl@gmail.com");
+                            producer.send(rec1);
+                            producer.send(rec2);
+                            producer.send(rec3);
                 }, executorService)
                         .whenComplete((result, ex) -> {
                             if (ex != null) {
@@ -91,6 +97,19 @@ public class GithubFetcher {
                 "       }\n" +
                 "  }";
         return new ProducerRecord<>(OUTPUT_TOPIC, "repo", commit);
+    }
+
+    private static ProducerRecord<String, String> produceRecord2(String accountInfo) {
+        String commit = "  {\n" +
+                "    \"commit\": {\n" +
+                "      \"author\": {\n" +
+                "        \"name\": \"Slava Oleshko\",\n" +
+                "        \"email\": \"" + accountInfo + "\",\n" +
+                "        \"date\": \"2011-04-15T16:00:49Z\"\n" +
+                "           }\n" +
+                "       }\n" +
+                "  }";
+        return new ProducerRecord<>(OUTPUT_TOPIC, "repo2", commit);
     }
 
     private static String makeRestCall(String value) {
