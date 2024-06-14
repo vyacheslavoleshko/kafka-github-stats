@@ -108,7 +108,7 @@ public class GithubAnalyzer {
                 .join(totalCommits, (r, commitsCnt) -> {
                     r.setTotalCommits(commitsCnt);
                     return r;
-                }, Materialized.<String, RepoStats, KeyValueStore<Bytes, byte[]>>as("top-5")
+                }, Materialized.<String, RepoStats, KeyValueStore<Bytes, byte[]>>as("repo-stats-store")
                         .withKeySerde(Serdes.String())
                         .withValueSerde(repoStatsSerde))
                 .toStream().to(OUTPUT_TOPIC, Produced.with(Serdes.String(), repoStatsSerde));
