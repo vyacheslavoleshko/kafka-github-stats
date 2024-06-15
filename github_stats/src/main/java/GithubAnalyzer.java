@@ -1,8 +1,14 @@
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.jaxrs.json.JacksonJaxbJsonProvider;
 import lombok.SneakyThrows;
 import model.Contributor;
 import model.ContributorWithCount;
 import model.RepoStats;
+import org.glassfish.hk2.utilities.binding.AbstractBinder;
+import org.glassfish.jersey.server.ResourceConfig;
+import rest.GithubAnalyzerRestService;
+import rest.KafkaRestService;
+import rest.WebServer;
 import serde.RepoStatsDeserializer;
 import serde.RepoStatsSerializer;
 import org.apache.kafka.common.serialization.Deserializer;
@@ -27,7 +33,11 @@ import model.TopFiveContributors;
 import serde.TopFiveDeserializer;
 import serde.TopFiveSerializer;
 
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Properties;
+import java.util.Set;
 import java.util.logging.Logger;
 
 import static org.apache.kafka.streams.StreamsConfig.EXACTLY_ONCE_V2;
@@ -39,6 +49,13 @@ public class GithubAnalyzer {
 
     public static final String INPUT_TOPIC = "github.commits";
     public static final String OUTPUT_TOPIC = "github.stats";
+    public static final String REPO_STATS_STORE = "repo-stats-store";
+    public static final String UNIQUE_REPOS_STORE = "unique-repos-store";
+    public static final String UNIQUE_REPOS_STORE_KEY = "dummyKey";
+    // TODO: externalize
+    public static final String API_HOST = "http://localhost";
+    public static final int API_PORT = 8070;
+
     private final static Serializer<TopFiveContributors> topFiveSerializer = new TopFiveSerializer();
     private final static Deserializer<TopFiveContributors> topFiveDeserializer = new TopFiveDeserializer();
 
@@ -54,13 +71,13 @@ public class GithubAnalyzer {
     private final static Deserializer<Contributor> contributorDeserializer = new SimpleObjectDeserializer<>(Contributor.class);
     private final static Serde<Contributor> contributorSerde = Serdes.serdeFrom(contributorSerializer, contributorDeserializer);
 
-
     private static final ObjectMapper mapper = new ObjectMapper();
 
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         log.info("Starting KafkaStreams...");
         Properties p = new Properties();
         p.setProperty(StreamsConfig.APPLICATION_ID_CONFIG, "github-analyzer");
+        p.setProperty(StreamsConfig.APPLICATION_SERVER_CONFIG,  API_HOST + ":" + API_PORT);
         p.setProperty(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
         p.setProperty(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, EXACTLY_ONCE_V2);
         p.setProperty(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
@@ -68,6 +85,17 @@ public class GithubAnalyzer {
 
         KStream<String, String> commits = builder.stream(INPUT_TOPIC);
         KTable<String, Long> totalCommits = commits.groupByKey().count();
+
+        totalCommits.toStream()
+                // Put all data into a single partition
+                .map((repoName, commitCount) -> new KeyValue<>(UNIQUE_REPOS_STORE_KEY, repoName))
+                .groupByKey()
+                .reduce((oldV, newV) -> {
+                    Set<String> uniqueRepoNames = new LinkedHashSet<>(Arrays.asList(oldV.split(",")));
+                    uniqueRepoNames.add(newV);
+                    var uniqueRepos = uniqueRepoNames.stream().reduce((a, b) -> a + "," + b);
+                    return uniqueRepos.orElse("");
+                }, Materialized.as(UNIQUE_REPOS_STORE));
 
         KTable<Contributor, Long> contributorCounts = commits
                 .groupBy(GithubAnalyzer::extractContributorFromCommit, Grouped.with(contributorSerde, Serdes.String()))
@@ -108,7 +136,7 @@ public class GithubAnalyzer {
                 .join(totalCommits, (r, commitsCnt) -> {
                     r.setTotalCommits(commitsCnt);
                     return r;
-                }, Materialized.<String, RepoStats, KeyValueStore<Bytes, byte[]>>as("repo-stats-store")
+                }, Materialized.<String, RepoStats, KeyValueStore<Bytes, byte[]>>as(REPO_STATS_STORE)
                         .withKeySerde(Serdes.String())
                         .withValueSerde(repoStatsSerde))
                 .toStream().to(OUTPUT_TOPIC, Produced.with(Serdes.String(), repoStatsSerde));
@@ -118,12 +146,34 @@ public class GithubAnalyzer {
         Topology topology = builder.build();
 
         KafkaStreams streams = new KafkaStreams(topology, config);
-
         streams.cleanUp();
         streams.start();
+
+        WebServer webServer = new WebServer(API_HOST, API_PORT);
+
+        ResourceConfig resourceConfig = new ResourceConfig();
+        resourceConfig.register(GithubAnalyzerRestService.class);
+        resourceConfig.register(JacksonJaxbJsonProvider.class);
+        resourceConfig.register(new AbstractBinder() {
+            @Override
+            protected void configure() {
+                bind(KafkaRestService.class).to(KafkaRestService.class);
+                bind(streams).to(KafkaStreams.class);
+                bind(API_PORT).to(Integer.class);
+                bind(API_HOST).to(String.class);
+            }
+        });
+        webServer.startWebServer(resourceConfig);
+
+
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             log.info("Closing KafkaStreams gracefully...");
             streams.close();
+            try {
+                webServer.stopWebServer();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
         }));
 
     }

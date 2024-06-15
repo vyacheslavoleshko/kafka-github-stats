@@ -1,45 +1,45 @@
 package rest;
 
 import com.fasterxml.jackson.core.util.JacksonFeature;
-import com.fasterxml.jackson.jaxrs.json.JacksonJaxbJsonProvider;
 import model.RepoStats;
 import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.common.serialization.Serializer;
+import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.streams.KafkaStreams;
-import org.apache.kafka.streams.StreamsBuilder;
-import org.apache.kafka.streams.StreamsConfig;
-import org.apache.kafka.streams.Topology;
-import org.apache.kafka.streams.kstream.KStream;
-import org.eclipse.jetty.server.Server;
-import org.eclipse.jetty.server.ServerConnector;
-import org.glassfish.jersey.jetty.JettyHttpContainerFactory;
-import org.glassfish.jersey.server.ResourceConfig;
-import org.glassfish.jersey.servlet.ServletContainer;
+import org.apache.kafka.streams.KeyQueryMetadata;
+import org.apache.kafka.streams.state.HostInfo;
+import org.apache.kafka.streams.state.QueryableStoreTypes;
+import org.apache.kafka.streams.state.ReadOnlyKeyValueStore;
+import org.jvnet.hk2.annotations.Service;
 
-import javax.ws.rs.GET;
+import javax.inject.Inject;
 import javax.ws.rs.NotFoundException;
-import javax.ws.rs.Path;
-import javax.ws.rs.PathParam;
-import javax.ws.rs.Produces;
 import javax.ws.rs.client.Client;
 import javax.ws.rs.client.ClientBuilder;
 import javax.ws.rs.core.GenericType;
 import javax.ws.rs.core.MediaType;
-import javax.ws.rs.core.UriBuilder;
-import java.net.URI;
+import java.util.Arrays;
 import java.util.List;
-import java.util.Properties;
-import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
-import static org.apache.kafka.streams.StreamsConfig.EXACTLY_ONCE_V2;
+import static org.apache.kafka.streams.StoreQueryParameters.fromNameAndType;
 
 public class KafkaRestService implements GithubAnalyzerApi {
 
-    private static final Logger log = Logger.getLogger(KafkaRestService.class.getSimpleName());
+    public static final String REPO_STATS_STORE = "repo-stats-store";
+    public static final String UNIQUE_REPOS_STORE = "unique-repos-store";
+    public static final String UNIQUE_REPOS_STORE_KEY = "dummyKey";
 
-    private final KafkaStreams streams;
-    private final String thisAppHost;
-    private final int thisAppPort;
+    private KafkaStreams streams;
+    private String thisAppHost;
+    private int thisAppPort;
 
+    private final Client client = ClientBuilder.newBuilder().register(JacksonFeature.class).build();
+
+    public KafkaRestService() {
+    }
+
+    @Inject
     public KafkaRestService(KafkaStreams streams, String thisAppHost, int thisAppPort) {
         this.streams = streams;
         this.thisAppHost = thisAppHost;
@@ -48,61 +48,64 @@ public class KafkaRestService implements GithubAnalyzerApi {
 
     @Override
     public List<String> getRepositories() {
-        return List.of();
+        KeyQueryMetadata metadata =
+                streamsMetadataForStoreAndKey(UNIQUE_REPOS_STORE, UNIQUE_REPOS_STORE_KEY, Serdes.String().serializer());
+        HostInfo hostInfo = metadata.activeHost();
+        if (!thisHost(hostInfo)) {
+            return fetchUniqueRepoDataFromOtherInstance(hostInfo, "repository");
+        }
+
+        // data is on this instance
+        ReadOnlyKeyValueStore<String, String> uniqueReposStore =
+                streams.store(fromNameAndType(UNIQUE_REPOS_STORE, QueryableStoreTypes.keyValueStore()));
+        return Arrays.stream(
+                uniqueReposStore.get(UNIQUE_REPOS_STORE_KEY).split(",")
+        ).collect(Collectors.toList());
     }
 
     @Override
-    public RepoStats getRepositoryStatistics(String repositoryName) {
-        return null;
-    }
-
-    private Server jettyServer;
-
-    /**
-     * Start an embedded Jetty Server
-     * @throws Exception from jetty
-     */
-    void start() throws Exception {
-        URI baseUri = UriBuilder.fromUri(thisAppHost).port(thisAppPort).build();
-        ResourceConfig config = new ResourceConfig();
-        config.register(GithubAnalyzerRestService.class);
-        config.register(JacksonJaxbJsonProvider.class);
-        jettyServer = JettyHttpContainerFactory.createServer(baseUri, config);
-        try {
-            jettyServer.start();
-            jettyServer.join();
-        } catch (final java.net.SocketException exception) {
-            log.severe("Unavailable: " + thisAppHost + ":" + thisAppPort);
-            throw new Exception(exception.toString());
+    public RepoStats getRepositoryStatistics(String repoName) {
+        KeyQueryMetadata metadata =
+                streamsMetadataForStoreAndKey(REPO_STATS_STORE, repoName, Serdes.String().serializer());
+        HostInfo hostInfo = metadata.activeHost();
+        if (!thisHost(hostInfo)) {
+            return fetchRepoStatsDataFromOtherInstance(hostInfo, "repository/stats/" + repoName);
         }
+
+        // data is on this instance
+        ReadOnlyKeyValueStore<String, RepoStats> repoStatsStore =
+                streams.store(fromNameAndType(REPO_STATS_STORE, QueryableStoreTypes.keyValueStore()));
+        return repoStatsStore.get(repoName);
     }
 
-    /**
-     * Stop the Jetty Server
-     * @throws Exception from jetty
-     */
-    void stop() throws Exception {
-        if (jettyServer != null) {
-            jettyServer.stop();
+    private List<String> fetchUniqueRepoDataFromOtherInstance(HostInfo hostInfo, String path) {
+        return client.target(String.format("http://%s:%d/%s", hostInfo.host(), hostInfo.port(), path))
+                .request(MediaType.APPLICATION_JSON_TYPE)
+                .get(new GenericType<>() {});
+    }
+
+    private RepoStats fetchRepoStatsDataFromOtherInstance(HostInfo hostInfo, String path) {
+        return client.target(String.format("http://%s:%d/%s", hostInfo.host(), hostInfo.port(), path))
+                .request(MediaType.APPLICATION_JSON_TYPE)
+                .get(new GenericType<>() {});
+    }
+
+    private boolean thisHost(HostInfo hostInfo) {
+        return hostInfo.host().equalsIgnoreCase(thisAppHost.replace("http://", ""))
+                && hostInfo.port() == thisAppPort;
+    }
+
+    private <K> KeyQueryMetadata streamsMetadataForStoreAndKey(final String store,
+                                                               final K key,
+                                                               final Serializer<K> serializer) {
+        // Get metadata for the instances of this Kafka Streams application hosting the store and
+        // potentially the value for key
+        final KeyQueryMetadata metadata = streams.queryMetadataForKey(store, key, serializer);
+        if (metadata == null) {
+            throw new NotFoundException();
         }
-    }
 
-    public static void main(String[] args) throws Exception {
-        Properties p = new Properties();
-        p.setProperty(StreamsConfig.APPLICATION_ID_CONFIG, "github-analyzer");
-        p.setProperty(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
-        p.setProperty(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, EXACTLY_ONCE_V2);
-        p.setProperty(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
-        p.setProperty(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
-
-        StreamsBuilder builder = new StreamsBuilder();
-        KStream<String, String> commits = builder.stream("github.commits");
-
-        var service = new KafkaRestService(
-                new KafkaStreams(builder.build(), p), "http://127.0.0.1", 8089
-        );
-        service.start();
-        System.out.println(service.jettyServer.isStarted());
+        return metadata;
     }
 
 }

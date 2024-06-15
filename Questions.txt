@@ -5,3 +5,4 @@
 4. Less hassle with custom serdes?
 TODO: schema registry?
 TODO: add compaction
+TODO: test GithubAnalyzer with multiple instances
