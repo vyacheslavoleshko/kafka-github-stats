@@ -1,4 +1,10 @@
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import lombok.AllArgsConstructor;
 import lombok.Data;
+import lombok.SneakyThrows;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
@@ -8,14 +14,25 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
+import org.kohsuke.github.GHCommit;
+import org.kohsuke.github.GHUser;
+import org.kohsuke.github.GitHubBuilder;
+import org.kohsuke.github.PagedIterator;
 
-import java.util.Arrays;
+import java.io.IOException;
+import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 import java.util.Properties;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
 public class GithubFetcher {
 
@@ -23,13 +40,36 @@ public class GithubFetcher {
     private static final String OUTPUT_TOPIC = "github.commits";
     private static final String BOOTSTRAP_SERVERS = "localhost:9092";
     private static final Logger log = Logger.getLogger(GithubFetcher.class.getSimpleName());
+    private static final ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule());
+    private static GithubRestClient restClient;
 
-    public static void main(String[] args) {
+    private static final ExecutorService messageExecutorService =
+            Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() + 1);
+    private static final ExecutorService githubApiExecutorService =
+            Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() + 1);
+    private static final ExecutorService commitExecutorService =
+            Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() + 1);
+
+
+    public static void main(String[] args) throws IOException {
         Properties consumerProps = new Properties();
         consumerProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, BOOTSTRAP_SERVERS);
         consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, "github-commits-consumer-group");
         consumerProps.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         consumerProps.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+        consumerProps.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
+        consumerProps.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        if (args.length == 0) {
+            throw new IllegalStateException("Please, specify Github token as system arg");
+        }
+        String githubToken = args[0];
+        try {
+            restClient = new GithubRestClient(new GitHubBuilder()
+                    .withOAuthToken(githubToken)
+                    .build());
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
 
         KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerProps);
         consumer.subscribe(Collections.singletonList(INPUT_TOPIC));
@@ -41,11 +81,13 @@ public class GithubFetcher {
 
         KafkaProducer<String, String> producer = new KafkaProducer<>(producerProps);
 
-        ExecutorService executorService = Executors.newFixedThreadPool(10);
 
         Runtime.getRuntime().addShutdownHook(new Thread() {
             public void run() {
                 log.info("Detected a shutdown, closing Consumer and Producer gracefully...");
+                messageExecutorService.shutdown();
+                githubApiExecutorService.shutdown();
+                commitExecutorService.shutdown();
                 producer.flush();
                 producer.close();
                 consumer.close();
@@ -54,148 +96,93 @@ public class GithubFetcher {
 
         while (true) {
             ConsumerRecords<String, String> records = consumer.poll(100);
+            CompletableFuture<Void>[] futures = new CompletableFuture[records.count()];
+            int i = 0;
             for (ConsumerRecord<String, String> record : records) {
-                CompletableFuture.runAsync(() -> {
-                    for (String dummy : Arrays.asList(
-                            "sl@gmail.com", "murr@gmail.com", "murr@gmail.com",
-                            "sl@gmail.com", "murr@gmail.com", "lilya@gmail.com",
-                            "viva@gmail.com", "tim@gmail.com", "test@gmail.com")) {
-                        ProducerRecord<String, String> producerRecord = produceRecord(dummy);
-                        producer.send(producerRecord);
-                    }
-                            var rec1 = produceRecord2("sl@gmail.com");
-                            var rec2 = produceRecord2("lilya@gmail.com");
-                            var rec3 = produceRecord2("sl@gmail.com");
-                            producer.send(rec1);
-                            producer.send(rec2);
-                            producer.send(rec3);
-                }, executorService)
-                        .whenComplete((result, ex) -> {
-                            if (ex != null) {
-                                // TODO: exception handling
-                                ex.printStackTrace();
-                            }
-                        });
+                futures[i] = CompletableFuture.runAsync(
+                                () -> processFetchRequests(producer, record.value()), messageExecutorService
+                        );
+                i++;
             }
+            CompletableFuture.allOf(futures).join();
+            consumer.commitSync();
         }
     }
 
+    @SneakyThrows
+    private static void processFetchRequests(
+            KafkaProducer<String, String> producer, String fetchRequestStr
+    ) {
+        log.info(String.format("Start processing of FetchRequest: %s", fetchRequestStr));
+        List<FetchRequest> fetchRequests = mapper.readValue(fetchRequestStr, new TypeReference<>() {});
+
+        CompletableFuture<Void>[] futures = fetchRequests.stream()
+                .map(fetchRequest ->
+                        CompletableFuture.runAsync(() -> getCommitsAndSend(producer, fetchRequest), githubApiExecutorService))
+                .toArray(CompletableFuture[]::new);
+        CompletableFuture.allOf(futures).join();
+    }
+
+    @SneakyThrows
+    private static void getCommitsAndSend(KafkaProducer<String, String> producer, FetchRequest fetchRequest) {
+        log.info(String.format("%s_%s: Getting commits...", fetchRequest.owner, fetchRequest.repo));
+        var iterator = restClient.getCommits(fetchRequest.owner, fetchRequest.repo, fetchRequest.since);
+        while (iterator.hasNext()) {
+            List<Commit> commits = mapCommits(iterator.nextPage(), fetchRequest.owner, fetchRequest.repo);
+            log.info(String.format("%s_%s: Fetched %s commits", fetchRequest.owner, fetchRequest.repo, commits.size()));
+            produceRecords(producer, commits);
+            log.info(String.format("%s_%s: Produced %s messages", fetchRequest.owner, fetchRequest.repo, commits.size()));
+        }
+    }
+
+    private static List<Commit> mapCommits(List<GHCommit> commits, String owner, String repo) {
+        CompletableFuture<Commit>[] futures = commits.stream()
+                .map(commit -> CompletableFuture.supplyAsync(() -> fetchCommitDetails(owner, repo, commit), commitExecutorService))
+                .toArray(CompletableFuture[]::new);
+        CompletableFuture.allOf(futures).join();
+
+        List<Commit> result = new ArrayList<>();
+        for (CompletableFuture<Commit> future : futures) {
+            result.add(future.join());
+        }
+        return result;
+    }
+
+    @SneakyThrows
+    private static Commit fetchCommitDetails(String owner, String repo, GHCommit commit) {
+        GHUser author = commit.getAuthor();
+        String name = "unknown" + UUID.randomUUID();
+        if (author != null) name = author.getLogin();
+        return new Commit(owner, repo, name);
+    }
+
+    private static void produceRecords(
+            KafkaProducer<String, String> producer, List<Commit> commits) {
+        commits.forEach(commit -> {
+            String key = commit.getOwner() + "_" + commit.getRepo();
+            try {
+                producer.send(new ProducerRecord<>(OUTPUT_TOPIC, key, mapper.writeValueAsString(commit)));
+            } catch (JsonProcessingException e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+
     @Data
-    private static class AccountInfo {
+    private static class FetchRequest {
 
-        String name;
+        private String owner;
+        private String repo;
+        private LocalDate since;
     }
 
-    private static ProducerRecord<String, String> produceRecord(String accountInfo) {
-        String commit = "  {\n" +
-                "    \"commit\": {\n" +
-                "      \"author\": {\n" +
-                "        \"name\": \"Slava Oleshko\",\n" +
-                "        \"email\": \"" + accountInfo + "\",\n" +
-                "        \"date\": \"2011-04-15T16:00:49Z\"\n" +
-                "           }\n" +
-                "       }\n" +
-                "  }";
-        return new ProducerRecord<>(OUTPUT_TOPIC, "repo", commit);
+    @Data
+    @AllArgsConstructor
+    private static class Commit {
+
+        String owner;
+        String repo;
+        String authorName;
     }
 
-    private static ProducerRecord<String, String> produceRecord2(String accountInfo) {
-        String commit = "  {\n" +
-                "    \"commit\": {\n" +
-                "      \"author\": {\n" +
-                "        \"name\": \"Slava Oleshko\",\n" +
-                "        \"email\": \"" + accountInfo + "\",\n" +
-                "        \"date\": \"2011-04-15T16:00:49Z\"\n" +
-                "           }\n" +
-                "       }\n" +
-                "  }";
-        return new ProducerRecord<>(OUTPUT_TOPIC, "repo2", commit);
-    }
-
-    private static String makeRestCall(String value) {
-        // Implement the logic to make a REST call based on the value
-        // and return the result
-        return "result";
-    }
-
-//    "[\n" +
-//            "  {\n" +
-//            "    \"url\": \"https://api.github.com/repos/octocat/Hello-World/commits/6dcb09b5b57875f334f61aebed695e2e4193db5e\",\n" +
-//            "    \"sha\": \"6dcb09b5b57875f334f61aebed695e2e4193db5e\",\n" +
-//            "    \"node_id\": \"MDY6Q29tbWl0NmRjYjA5YjViNTc4NzVmMzM0ZjYxYWViZWQ2OTVlMmU0MTkzZGI1ZQ==\",\n" +
-//            "    \"html_url\": \"https://github.com/octocat/Hello-World/commit/6dcb09b5b57875f334f61aebed695e2e4193db5e\",\n" +
-//            "    \"comments_url\": \"https://api.github.com/repos/octocat/Hello-World/commits/6dcb09b5b57875f334f61aebed695e2e4193db5e/comments\",\n" +
-//            "    \"commit\": {\n" +
-//            "      \"url\": \"https://api.github.com/repos/octocat/Hello-World/git/commits/6dcb09b5b57875f334f61aebed695e2e4193db5e\",\n" +
-//            "      \"author\": {\n" +
-//            "        \"name\": \"Monalisa Octocat\",\n" +
-//            "        \"email\": \"support@github.com\",\n" +
-//            "        \"date\": \"2011-04-14T16:00:49Z\"\n" +
-//            "      },\n" +
-//            "      \"committer\": {\n" +
-//            "        \"name\": \"Monalisa Octocat\",\n" +
-//            "        \"email\": \"support@github.com\",\n" +
-//            "        \"date\": \"2011-04-14T16:00:49Z\"\n" +
-//            "      },\n" +
-//            "      \"message\": \"Fix all the bugs\",\n" +
-//            "      \"tree\": {\n" +
-//            "        \"url\": \"https://api.github.com/repos/octocat/Hello-World/tree/6dcb09b5b57875f334f61aebed695e2e4193db5e\",\n" +
-//            "        \"sha\": \"6dcb09b5b57875f334f61aebed695e2e4193db5e\"\n" +
-//            "      },\n" +
-//            "      \"comment_count\": 0,\n" +
-//            "      \"verification\": {\n" +
-//            "        \"verified\": false,\n" +
-//            "        \"reason\": \"unsigned\",\n" +
-//            "        \"signature\": null,\n" +
-//            "        \"payload\": null\n" +
-//            "      }\n" +
-//            "    },\n" +
-//            "    \"author\": {\n" +
-//            "      \"login\": \"octocat\",\n" +
-//            "      \"id\": 1,\n" +
-//            "      \"node_id\": \"MDQ6VXNlcjE=\",\n" +
-//            "      \"avatar_url\": \"https://github.com/images/error/octocat_happy.gif\",\n" +
-//            "      \"gravatar_id\": \"\",\n" +
-//            "      \"url\": \"https://api.github.com/users/octocat\",\n" +
-//            "      \"html_url\": \"https://github.com/octocat\",\n" +
-//            "      \"followers_url\": \"https://api.github.com/users/octocat/followers\",\n" +
-//            "      \"following_url\": \"https://api.github.com/users/octocat/following{/other_user}\",\n" +
-//            "      \"gists_url\": \"https://api.github.com/users/octocat/gists{/gist_id}\",\n" +
-//            "      \"starred_url\": \"https://api.github.com/users/octocat/starred{/owner}{/repo}\",\n" +
-//            "      \"subscriptions_url\": \"https://api.github.com/users/octocat/subscriptions\",\n" +
-//            "      \"organizations_url\": \"https://api.github.com/users/octocat/orgs\",\n" +
-//            "      \"repos_url\": \"https://api.github.com/users/octocat/repos\",\n" +
-//            "      \"events_url\": \"https://api.github.com/users/octocat/events{/privacy}\",\n" +
-//            "      \"received_events_url\": \"https://api.github.com/users/octocat/received_events\",\n" +
-//            "      \"type\": \"User\",\n" +
-//            "      \"site_admin\": false\n" +
-//            "    },\n" +
-//            "    \"committer\": {\n" +
-//            "      \"login\": \"octocat\",\n" +
-//            "      \"id\": 1,\n" +
-//            "      \"node_id\": \"MDQ6VXNlcjE=\",\n" +
-//            "      \"avatar_url\": \"https://github.com/images/error/octocat_happy.gif\",\n" +
-//            "      \"gravatar_id\": \"\",\n" +
-//            "      \"url\": \"https://api.github.com/users/octocat\",\n" +
-//            "      \"html_url\": \"https://github.com/octocat\",\n" +
-//            "      \"followers_url\": \"https://api.github.com/users/octocat/followers\",\n" +
-//            "      \"following_url\": \"https://api.github.com/users/octocat/following{/other_user}\",\n" +
-//            "      \"gists_url\": \"https://api.github.com/users/octocat/gists{/gist_id}\",\n" +
-//            "      \"starred_url\": \"https://api.github.com/users/octocat/starred{/owner}{/repo}\",\n" +
-//            "      \"subscriptions_url\": \"https://api.github.com/users/octocat/subscriptions\",\n" +
-//            "      \"organizations_url\": \"https://api.github.com/users/octocat/orgs\",\n" +
-//            "      \"repos_url\": \"https://api.github.com/users/octocat/repos\",\n" +
-//            "      \"events_url\": \"https://api.github.com/users/octocat/events{/privacy}\",\n" +
-//            "      \"received_events_url\": \"https://api.github.com/users/octocat/received_events\",\n" +
-//            "      \"type\": \"User\",\n" +
-//            "      \"site_admin\": false\n" +
-//            "    },\n" +
-//            "    \"parents\": [\n" +
-//            "      {\n" +
-//            "        \"url\": \"https://api.github.com/repos/octocat/Hello-World/commits/6dcb09b5b57875f334f61aebed695e2e4193db5e\",\n" +
-//            "        \"sha\": \"6dcb09b5b57875f334f61aebed695e2e4193db5e\"\n" +
-//            "      }\n" +
-//            "    ]\n" +
-//            "  }\n" +
-//            "]"
 }

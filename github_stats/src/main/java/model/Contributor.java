@@ -13,9 +13,9 @@ public class Contributor {
     public Contributor() {
     }
 
-    public Contributor(String repo, String email) {
+    public Contributor(String repo, String authorName) {
         this.repo = repo;
-        this.email = email;
+        this.email = authorName;
     }
 
     String repo;

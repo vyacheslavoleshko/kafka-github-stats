@@ -180,11 +180,9 @@ public class GithubAnalyzer {
 
     @SneakyThrows
     private static Contributor extractContributorFromCommit(String repo, String commit) {
-        String userEmail = mapper.readTree(commit)
-                .path("commit")
-                .path("author")
-                .path("email").asText();
-        return new Contributor(repo, userEmail);
+        String authorName = mapper.readTree(commit)
+                .path("authorName").asText();
+        return new Contributor(repo, authorName);
     }
 
 }
