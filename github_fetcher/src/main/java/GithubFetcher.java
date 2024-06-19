@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -78,21 +79,19 @@ public class GithubFetcher {
         producerProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, BOOTSTRAP_SERVERS);
         producerProps.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
         producerProps.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        producerProps.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true");
 
         KafkaProducer<String, String> producer = new KafkaProducer<>(producerProps);
 
-
-        Runtime.getRuntime().addShutdownHook(new Thread() {
-            public void run() {
-                log.info("Detected a shutdown, closing Consumer and Producer gracefully...");
-                messageExecutorService.shutdown();
-                githubApiExecutorService.shutdown();
-                commitExecutorService.shutdown();
-                producer.flush();
-                producer.close();
-                consumer.close();
-            }
-        });
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            log.info("Detected a shutdown, closing Consumer and Producer gracefully...");
+            messageExecutorService.shutdown();
+            githubApiExecutorService.shutdown();
+            commitExecutorService.shutdown();
+            producer.flush();
+            producer.close();
+            consumer.close();
+        }));
 
         while (true) {
             ConsumerRecords<String, String> records = consumer.poll(100);
@@ -117,6 +116,7 @@ public class GithubFetcher {
         List<FetchRequest> fetchRequests = mapper.readValue(fetchRequestStr, new TypeReference<>() {});
 
         CompletableFuture<Void>[] futures = fetchRequests.stream()
+                .peek(fetchRequest -> fetchRequest.setId(UUID.randomUUID()))
                 .map(fetchRequest ->
                         CompletableFuture.runAsync(() -> getCommitsAndSend(producer, fetchRequest), githubApiExecutorService))
                 .toArray(CompletableFuture[]::new);
@@ -128,16 +128,16 @@ public class GithubFetcher {
         log.info(String.format("%s_%s: Getting commits...", fetchRequest.owner, fetchRequest.repo));
         var iterator = restClient.getCommits(fetchRequest.owner, fetchRequest.repo, fetchRequest.since);
         while (iterator.hasNext()) {
-            List<Commit> commits = mapCommits(iterator.nextPage(), fetchRequest.owner, fetchRequest.repo);
+            List<Commit> commits = mapCommits(iterator.nextPage(), fetchRequest);
             log.info(String.format("%s_%s: Fetched %s commits", fetchRequest.owner, fetchRequest.repo, commits.size()));
             produceRecords(producer, commits);
             log.info(String.format("%s_%s: Produced %s messages", fetchRequest.owner, fetchRequest.repo, commits.size()));
         }
     }
 
-    private static List<Commit> mapCommits(List<GHCommit> commits, String owner, String repo) {
+    private static List<Commit> mapCommits(List<GHCommit> commits, FetchRequest req) {
         CompletableFuture<Commit>[] futures = commits.stream()
-                .map(commit -> CompletableFuture.supplyAsync(() -> fetchCommitDetails(owner, repo, commit), commitExecutorService))
+                .map(commit -> CompletableFuture.supplyAsync(() -> fetchCommitDetails(req.owner, req.repo, commit, req.id), commitExecutorService))
                 .toArray(CompletableFuture[]::new);
         CompletableFuture.allOf(futures).join();
 
@@ -149,11 +149,11 @@ public class GithubFetcher {
     }
 
     @SneakyThrows
-    private static Commit fetchCommitDetails(String owner, String repo, GHCommit commit) {
+    private static Commit fetchCommitDetails(String owner, String repo, GHCommit commit, UUID fetchRequestId) {
         GHUser author = commit.getAuthor();
         String name = "unknown" + UUID.randomUUID();
         if (author != null) name = author.getLogin();
-        return new Commit(owner, repo, name);
+        return new Commit(owner, repo, name, fetchRequestId);
     }
 
     private static void produceRecords(
@@ -174,6 +174,7 @@ public class GithubFetcher {
         private String owner;
         private String repo;
         private LocalDate since;
+        private UUID id;
     }
 
     @Data
@@ -183,6 +184,7 @@ public class GithubFetcher {
         String owner;
         String repo;
         String authorName;
+        UUID fetchRequestId;
     }
 
 }

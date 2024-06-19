@@ -1,17 +1,12 @@
 [
   {
     "owner": "apache",
-    "repo": "cassandra",
-    "since": "2024-04-01"
-  },
-  {
-    "owner": "apache",
     "repo": "kafka",
     "since": "2024-05-01"
   },
   {
     "owner": "apache",
     "repo": "httpcomponents-client",
-    "since": "2024-05-01"
+    "since": "2024-06-01"
   }
 ]

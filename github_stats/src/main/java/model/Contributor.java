@@ -1,9 +1,10 @@
 package model;
 
-import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.Setter;
+
+import java.util.UUID;
 
 @Getter
 @Setter
@@ -13,11 +14,13 @@ public class Contributor {
     public Contributor() {
     }
 
-    public Contributor(String repo, String authorName) {
+    public Contributor(String repo, String login, UUID fetchRequestId) {
         this.repo = repo;
-        this.email = authorName;
+        this.login = login;
+        this.fetchRequestId = fetchRequestId;
     }
 
     String repo;
-    String email;
+    String login;
+    UUID fetchRequestId;
 }
