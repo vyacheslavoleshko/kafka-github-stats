@@ -1,5 +1,6 @@
 package model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.Setter;
@@ -23,4 +24,9 @@ public class Contributor {
     String repo;
     String login;
     UUID fetchRequestId;
+
+    @JsonIgnore
+    public Key getKey() {
+        return new Key(repo, fetchRequestId);
+    }
 }

@@ -52,7 +52,7 @@ public class GithubFetcher {
             Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() + 1);
 
 
-    public static void main(String[] args) throws IOException {
+    public static void main(String[] args) {
         Properties consumerProps = new Properties();
         consumerProps.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, BOOTSTRAP_SERVERS);
         consumerProps.put(ConsumerConfig.GROUP_ID_CONFIG, "github-commits-consumer-group");
@@ -130,7 +130,7 @@ public class GithubFetcher {
         while (iterator.hasNext()) {
             List<Commit> commits = mapCommits(iterator.nextPage(), fetchRequest);
             log.info(String.format("%s_%s: Fetched %s commits", fetchRequest.owner, fetchRequest.repo, commits.size()));
-            produceRecords(producer, commits);
+            produceRecords(producer, commits, fetchRequest.getId());
             log.info(String.format("%s_%s: Produced %s messages", fetchRequest.owner, fetchRequest.repo, commits.size()));
         }
     }
@@ -153,13 +153,16 @@ public class GithubFetcher {
         GHUser author = commit.getAuthor();
         String name = "unknown" + UUID.randomUUID();
         if (author != null) name = author.getLogin();
-        return new Commit(owner, repo, name, fetchRequestId);
+        return new Commit(owner + ":" + repo, name, fetchRequestId);
     }
 
     private static void produceRecords(
-            KafkaProducer<String, String> producer, List<Commit> commits) {
+            KafkaProducer<String, String> producer, List<Commit> commits, UUID fetchRequestId) {
         commits.forEach(commit -> {
-            String key = commit.getOwner() + "_" + commit.getRepo();
+            // Key is composed of unique repo name + unique ID of fetch request. By including ID when calculating
+            // statistics downstream we perform GROUP BY for the particular FetchRequest only. If the data for the same
+            // owner + repo data has been already fetched before, it will be overridden.
+            String key = commit.getRepo() + ":" + fetchRequestId;
             try {
                 producer.send(new ProducerRecord<>(OUTPUT_TOPIC, key, mapper.writeValueAsString(commit)));
             } catch (JsonProcessingException e) {
@@ -181,8 +184,7 @@ public class GithubFetcher {
     @AllArgsConstructor
     private static class Commit {
 
-        String owner;
-        String repo;
+        String repo;  // in the format of owner:repoName
         String authorName;
         UUID fetchRequestId;
     }

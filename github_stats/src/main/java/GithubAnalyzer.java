@@ -1,15 +1,23 @@
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.jaxrs.json.JacksonJaxbJsonProvider;
+import lombok.Data;
+import lombok.EqualsAndHashCode;
 import lombok.SneakyThrows;
 import model.Contributor;
 import model.ContributorWithCount;
+import model.Key;
 import model.RepoStats;
+import org.apache.kafka.streams.kstream.Consumed;
 import org.glassfish.hk2.utilities.binding.AbstractBinder;
 import org.glassfish.jersey.server.ResourceConfig;
 import rest.GithubAnalyzerRestService;
 import rest.KafkaRestService;
 import rest.WebServer;
+import serde.KeyDeserializer;
+import serde.KeySerializer;
 import serde.RepoStatsDeserializer;
 import serde.RepoStatsSerializer;
 import org.apache.kafka.common.serialization.Deserializer;
@@ -36,6 +44,8 @@ import serde.TopFiveSerializer;
 
 import java.util.Arrays;
 import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
@@ -56,6 +66,10 @@ public class GithubAnalyzer {
     // TODO: externalize
     public static final String API_HOST = "http://localhost";
     public static final int API_PORT = 8070;
+
+    private final static Serializer<Key> keySerializer = new KeySerializer();
+    private final static Deserializer<Key> keyDeserializer = new KeyDeserializer();
+    private final static Serde<Key> keySerde = Serdes.serdeFrom(keySerializer, keyDeserializer);
 
     private final static Serializer<TopFiveContributors> topFiveSerializer = new TopFiveSerializer();
     private final static Deserializer<TopFiveContributors> topFiveDeserializer = new TopFiveDeserializer();
@@ -84,16 +98,17 @@ public class GithubAnalyzer {
         p.setProperty(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
         p.setProperty(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
 
-        KStream<String, String> commits = builder.stream(INPUT_TOPIC);
-        KTable<String, Long> totalCommits = commits.groupBy(
-                (repo, commit) -> repo + "&" + extractContributorFromCommit(repo, commit).getFetchRequestId())
-                .count()
-                .toStream()
-                .selectKey((k, v) -> k.split("&")[0])
-                .toTable();
+        KStream<Key, String> commits = builder.stream(INPUT_TOPIC, Consumed.with(keySerde, Serdes.String()));
+        KTable<String, Long> totalCommits =
+                commits.groupByKey()
+                    .count()
+                    .toStream()
+                    .selectKey((k, v) -> k.getRepo())
+                    .toTable();
 
         totalCommits.toStream()
-                // Put all data into a single partition
+                // Put all data into a single partition. This is needed to avoid querying all Kafka Streams app
+                // instances to gather the entire state.
                 .map((repoName, commitCount) -> new KeyValue<>(UNIQUE_REPOS_STORE_KEY, repoName))
                 .groupByKey()
                 .reduce((oldV, newV) -> {
@@ -103,19 +118,19 @@ public class GithubAnalyzer {
                     return uniqueRepos.orElse("");
                 }, Materialized.as(UNIQUE_REPOS_STORE));
 
-        KTable<Contributor, Long> contributorCounts = commits
+        KTable<Contributor, Long> contributorCount = commits
                 .groupBy(GithubAnalyzer::extractContributorFromCommit, Grouped.with(contributorSerde, Serdes.String()))
                 .count();
         KTable<String, Long> totalUniqueCommitters =
-                contributorCounts
-                        .groupBy((contributor, commitCnt) -> KeyValue.pair(contributor.getRepo() + "&" + contributor.getFetchRequestId(), commitCnt),
-                                Grouped.with(Serdes.String(), Serdes.Long()))
+                contributorCount
+                        .groupBy((k, v) -> KeyValue.pair(k.getKey(), v),
+                                Grouped.with(keySerde, Serdes.Long()))
                         .count()
                         .toStream()
-                        .selectKey((k, v) -> k.split("&")[0])
+                        .selectKey((k, v) -> k.getRepo())
                         .toTable();
 
-        contributorCounts
+        contributorCount
                 .mapValues((contributor, commitCount) ->
                         new ContributorWithCount(
                                 contributor.getRepo(),
@@ -124,27 +139,26 @@ public class GithubAnalyzer {
                 )
                 .groupBy((contributor, contributorWithCount) ->
                                 KeyValue.pair(
-                                        contributorWithCount.getRepo() + "&" + contributor.getFetchRequestId(),
+                                        contributor.getKey(),
                                         contributorWithCount),
-                        Grouped.with(Serdes.String(), contributorWithCountSerde))
+                        Grouped.with(keySerde, contributorWithCountSerde))
                 .aggregate(
                         RepoStats::new,
-                        (repo, contributorWithCount, agg) -> {
+                        (key, contributorWithCount, agg) -> {
                             agg.getTopFiveContributors().add(contributorWithCount);
                             return agg;
                         },
-                        (repo, contributorWithCount, agg) -> {
+                        (key, contributorWithCount, agg) -> {
                             agg.getTopFiveContributors().remove(contributorWithCount);
                             return agg;
-                        }, Materialized.with(Serdes.String(), repoStatsSerde)
-                )
-                .toStream()
-                .selectKey((k, v) -> k.split("&")[0])
+                        }, Materialized.with(keySerde, repoStatsSerde)
+                ).toStream()
+                .selectKey((k, v) -> k.getRepo())
                 .toTable()
                 .join(totalUniqueCommitters, (r, committersCnt) -> {
                     r.setTotalCommitters(committersCnt);
                     return r;
-                }, Materialized.with(Serdes.String(), repoStatsSerde))
+                })
                 .join(totalCommits, (r, commitsCnt) -> {
                     r.setTotalCommits(commitsCnt);
                     return r;
@@ -191,13 +205,13 @@ public class GithubAnalyzer {
     }
 
     @SneakyThrows
-    private static Contributor extractContributorFromCommit(String repo, String commit) {
+    private static Contributor extractContributorFromCommit(Key key, String commit) {
         JsonNode commitNode = mapper.readTree(commit);
         String authorName = commitNode
                 .path("authorName").asText();
         UUID fetchRequestId = UUID.fromString(commitNode
                 .path("fetchRequestId").asText());
-        return new Contributor(repo, authorName, fetchRequestId);
+        return new Contributor(key.getRepo(), authorName, fetchRequestId);
     }
 
 }
