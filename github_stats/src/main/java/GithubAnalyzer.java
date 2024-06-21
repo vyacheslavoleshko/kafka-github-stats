@@ -42,6 +42,10 @@ import model.TopFiveContributors;
 import serde.TopFiveDeserializer;
 import serde.TopFiveSerializer;
 
+import javax.ws.rs.container.ContainerRequestContext;
+import javax.ws.rs.container.ContainerResponseContext;
+import javax.ws.rs.container.ContainerResponseFilter;
+import javax.ws.rs.ext.Provider;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -180,6 +184,7 @@ public class GithubAnalyzer {
         ResourceConfig resourceConfig = new ResourceConfig();
         resourceConfig.register(GithubAnalyzerRestService.class);
         resourceConfig.register(JacksonJaxbJsonProvider.class);
+        resourceConfig.register(new CORSFilter());
         resourceConfig.register(new AbstractBinder() {
             @Override
             protected void configure() {
@@ -202,6 +207,19 @@ public class GithubAnalyzer {
             }
         }));
 
+    }
+
+    @Provider
+    public static class CORSFilter implements ContainerResponseFilter {
+
+        @Override
+        public void filter(final ContainerRequestContext requestContext,
+                           final ContainerResponseContext cres) {
+            cres.getHeaders().add("Access-Control-Allow-Origin", "*");
+            cres.getHeaders().add("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD");
+            cres.getHeaders().add("Access-Control-Allow-Credentials", "true");
+            cres.getHeaders().add("Access-Control-Allow-Headers", "Access-Control-Allow-Headers, Origin,Accept, X-Requested-With, Content-Type, Access-Control-Request-Method, Access-Control-Request-Headers");
+        }
     }
 
     @SneakyThrows
