@@ -1,4 +1,4 @@
-package serde;
+package utils.src.main.java.serde;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.kafka.common.serialization.Deserializer;

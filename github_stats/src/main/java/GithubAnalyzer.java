@@ -36,11 +36,11 @@ import org.apache.kafka.streams.kstream.KTable;
 import org.apache.kafka.streams.kstream.Materialized;
 import org.apache.kafka.streams.kstream.Produced;
 import org.apache.kafka.streams.state.KeyValueStore;
-import serde.SimpleObjectDeserializer;
-import serde.SimpleObjectSerializer;
 import model.TopFiveContributors;
 import serde.TopFiveDeserializer;
 import serde.TopFiveSerializer;
+import utils.src.main.java.serde.SimpleObjectDeserializer;
+import utils.src.main.java.serde.SimpleObjectSerializer;
 
 import javax.ws.rs.container.ContainerRequestContext;
 import javax.ws.rs.container.ContainerResponseContext;
