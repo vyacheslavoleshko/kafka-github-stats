@@ -39,7 +39,7 @@ public class GithubFetcher {
 
     private static final String INPUT_TOPIC = "github.accounts";
     private static final String OUTPUT_TOPIC = "github.commits";
-    private static final String BOOTSTRAP_SERVERS = "localhost:9092";
+    private static final String BOOTSTRAP_SERVERS = "localhost:9091,localhost:9092,localhost:9093";
     private static final Logger log = Logger.getLogger(GithubFetcher.class.getSimpleName());
     private static final ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule());
     private static GithubRestClient restClient;

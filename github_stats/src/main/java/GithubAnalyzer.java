@@ -67,9 +67,9 @@ public class GithubAnalyzer {
     public static final String REPO_STATS_STORE = "repo-stats-store";
     public static final String UNIQUE_REPOS_STORE = "unique-repos-store";
     public static final String UNIQUE_REPOS_STORE_KEY = "dummyKey";
-    // TODO: externalize
-    public static final String API_HOST = "http://localhost";
-    public static final int API_PORT = 8070;
+
+    public static String API_HOST = "";
+    public static int API_PORT = -1;
 
     private final static Serializer<Key> keySerializer = new KeySerializer();
     private final static Deserializer<Key> keyDeserializer = new KeyDeserializer();
@@ -93,11 +93,14 @@ public class GithubAnalyzer {
     private static final ObjectMapper mapper = new ObjectMapper();
 
     public static void main(String[] args) throws Exception {
+        API_HOST = args[0];
+        API_PORT = Integer.parseInt(args[1]);
+
         log.info("Starting KafkaStreams...");
         Properties p = new Properties();
         p.setProperty(StreamsConfig.APPLICATION_ID_CONFIG, "github-analyzer");
         p.setProperty(StreamsConfig.APPLICATION_SERVER_CONFIG,  API_HOST + ":" + API_PORT);
-        p.setProperty(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
+        p.setProperty(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9091,localhost:9092,localhost:9093");
         p.setProperty(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, EXACTLY_ONCE_V2);
         p.setProperty(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
         p.setProperty(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
