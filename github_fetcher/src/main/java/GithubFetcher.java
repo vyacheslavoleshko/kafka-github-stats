@@ -64,6 +64,7 @@ public class GithubFetcher {
             throw new IllegalStateException("Please, specify Github token as system arg");
         }
         String githubToken = args[0];
+        log.info("Received token: " + githubToken);
         try {
             restClient = new GithubRestClient(new GitHubBuilder()
                     .withOAuthToken(githubToken)

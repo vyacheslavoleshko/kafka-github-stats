@@ -20,11 +20,14 @@ import javax.ws.rs.core.GenericType;
 import javax.ws.rs.core.MediaType;
 import java.util.Arrays;
 import java.util.List;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 import static org.apache.kafka.streams.StoreQueryParameters.fromNameAndType;
 
 public class KafkaRestService implements GithubAnalyzerApi {
+
+    private static final Logger log = Logger.getLogger(KafkaRestService.class.getSimpleName());
 
     public static final String REPO_STATS_STORE = "repo-stats-store";
     public static final String UNIQUE_REPOS_STORE = "unique-repos-store";
@@ -52,6 +55,7 @@ public class KafkaRestService implements GithubAnalyzerApi {
                 streamsMetadataForStoreAndKey(UNIQUE_REPOS_STORE, UNIQUE_REPOS_STORE_KEY, Serdes.String().serializer());
         HostInfo hostInfo = metadata.activeHost();
         if (!thisHost(hostInfo)) {
+            log.info("Requested data is located not at the current instance. Fetching it from " + hostInfo);
             return fetchUniqueRepoDataFromOtherInstance(hostInfo, "repository");
         }
 
@@ -69,6 +73,7 @@ public class KafkaRestService implements GithubAnalyzerApi {
                 streamsMetadataForStoreAndKey(REPO_STATS_STORE, repoName, Serdes.String().serializer());
         HostInfo hostInfo = metadata.activeHost();
         if (!thisHost(hostInfo)) {
+            log.info("Requested data is located not at the current instance. Fetching it from " + hostInfo);
             return fetchRepoStatsDataFromOtherInstance(hostInfo, "repository/stats/" + repoName);
         }
 

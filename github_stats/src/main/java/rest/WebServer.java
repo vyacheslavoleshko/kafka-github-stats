@@ -48,6 +48,7 @@ public class WebServer {
     public void stopWebServer() throws Exception {
         if (jettyServer != null) {
             jettyServer.stop();
+            jettyServer.join();
         }
     }
 }

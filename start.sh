@@ -23,14 +23,25 @@ kafka-topics.sh --create --topic github.stats --bootstrap-server localhost:9091,
 #mvn clean package
 #java -jar target/kafka-github-spool-1.0-SNAPSHOT.jar
 
+# Run GithubFetcher app to retrieve github commit data
 cd github_fetcher
 mvn clean package
-java -jar target/kafka-github-fetcher-1.0-SNAPSHOT.jar $YOUR_GITHUB_TOKEN > github_fetcher.log 2>&1 &
+java -jar target/kafka-github-fetcher-1.0-SNAPSHOT.jar $YOUR_GITHUB_TOKEN > github_fetcher1.log 2>&1 &
+java -jar target/kafka-github-fetcher-1.0-SNAPSHOT.jar $YOUR_GITHUB_TOKEN > github_fetcher2.log 2>&1 &
 
+# Run GithubAnalyzer app to calculate statistics for commits
 cd ..
 cd github_stats
 mvn clean package
-java -jar target/kafka-github-stats-1.0-SNAPSHOT.jar http://localhost 8070 > github_analyzer.log 2>&1 &
+java -jar target/kafka-github-stats-1.0-SNAPSHOT.jar http://localhost 8070 github_analyzer1 > github_analyzer1.log 2>&1 &
+sleep 5
+java -jar target/kafka-github-stats-1.0-SNAPSHOT.jar http://localhost 8071 github_analyzer2 > github_analyzer2.log 2>&1 &
+
+# Run Frontend
+cd ..
+cd web_ui
+npm install
+npm run serve > web_ui.log 2>&1 &
 
 # Navigate to the specified directory
 cd ..

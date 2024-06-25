@@ -55,6 +55,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.logging.Logger;
 
+import static org.apache.kafka.streams.StreamsConfig.APPLICATION_ID_CONFIG;
 import static org.apache.kafka.streams.StreamsConfig.EXACTLY_ONCE_V2;
 
 public class GithubAnalyzer {
@@ -70,6 +71,7 @@ public class GithubAnalyzer {
 
     public static String API_HOST = "";
     public static int API_PORT = -1;
+    public static String APPLICATION_ID = "";
 
     private final static Serializer<Key> keySerializer = new KeySerializer();
     private final static Deserializer<Key> keyDeserializer = new KeyDeserializer();
@@ -95,10 +97,11 @@ public class GithubAnalyzer {
     public static void main(String[] args) throws Exception {
         API_HOST = args[0];
         API_PORT = Integer.parseInt(args[1]);
+        APPLICATION_ID = args[2];
 
         log.info("Starting KafkaStreams...");
         Properties p = new Properties();
-        p.setProperty(StreamsConfig.APPLICATION_ID_CONFIG, "github-analyzer");
+        p.setProperty(StreamsConfig.APPLICATION_ID_CONFIG, APPLICATION_ID);
         p.setProperty(StreamsConfig.APPLICATION_SERVER_CONFIG,  API_HOST + ":" + API_PORT);
         p.setProperty(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9091,localhost:9092,localhost:9093");
         p.setProperty(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, EXACTLY_ONCE_V2);
@@ -184,6 +187,16 @@ public class GithubAnalyzer {
 
         WebServer webServer = new WebServer(API_HOST, API_PORT);
 
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            log.info("Closing KafkaStreams gracefully...");
+            streams.close();
+            try {
+                webServer.stopWebServer();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }));
+
         ResourceConfig resourceConfig = new ResourceConfig();
         resourceConfig.register(GithubAnalyzerRestService.class);
         resourceConfig.register(JacksonJaxbJsonProvider.class);
@@ -198,17 +211,6 @@ public class GithubAnalyzer {
             }
         });
         webServer.startWebServer(resourceConfig);
-
-
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            log.info("Closing KafkaStreams gracefully...");
-            streams.close();
-            try {
-                webServer.stopWebServer();
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-        }));
 
     }
 
