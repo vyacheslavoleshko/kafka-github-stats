@@ -149,28 +149,41 @@ services:
       options:
         max-size: "1m"
 
+  connect:
+    image: confluentinc/cp-kafka-connect:latest
+    ports:
+      - "8083:8083"
+    depends_on:
+      - broker-1
+      - broker-2
+      - broker-3
+    container_name: spooldir-connect
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: broker-1:29091,broker-2:29092,broker-3:29093
+      CONNECT_GROUP_ID: connect-cluster
+      CONNECT_CONFIG_STORAGE_TOPIC: connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: connect-status
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_REST_ADVERTISED_HOST_NAME: connect
+      CONNECT_REST_PORT: 8083
+      CONNECT_LOG4J_ROOT_LOGLEVEL: INFO
+      CONNECT_PLUGIN_PATH: /usr/share/java,/etc/kafka-connect/jars
+    networks:
+      - kafka
+    volumes:
+      - ./lib/kafka-connect-spooldir/lib:/etc/kafka-connect/jars
+      - ./directory_reader/sourcedir:/sourcedir
+      - ./directory_reader/errors:/errors
+      - ./directory_reader/finished:/finished
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
 networks:
   kafka:
     name: kafka
-
-
-
-#version: '2'
-#
-#services:
-#  kafka-cluster:
-#    image: landoop/fast-data-dev:3.6
-#    environment:
-#      ADV_HOST: 127.0.0.1         # Change to 192.168.99.100 if using Docker Toolbox
-#      RUNTESTS: 0                 # Disable Running tests so the cluster starts faster
-#    volumes:
-#      - ./lib/kafka-connect-spooldir:/opt/landoop/connectors/third-party/kafka-connect-spooldir
-#      - ./directory_reader/src/main/resources/sourcedir:/sourcedir
-#      - ./directory_reader/src/main/resources/errors:/errors
-#      - ./directory_reader/src/main/resources/finished:/finished
-#    ports:
-#      - 2181:2181                 # Zookeeper
-#      - 3030:3030                 # Landoop UI
-#      - 8083-8085:8081-8083       # REST Proxy, Schema Registry, Kafka Connect ports
-#      - 9581-9585:9581-9585       # JMX Ports
-#      - 9092:9092                 # Kafka Broker

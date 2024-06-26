@@ -1,0 +1,14 @@
+{
+  "name": "spooldir-connector",
+  "config": {
+    "connector.class": "com.github.jcustenborder.kafka.connect.spooldir.SpoolDirSchemaLessJsonSourceConnector",
+    "input.path": "/sourcedir",
+    "error.path": "/errors",
+    "finished.path": "/finished",
+    "input.file.pattern": ".*.json",
+    "topic": "github.accounts",
+    "halt.on.error": "false",
+    "value.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "tasks.max": "1"
+  }
+}
