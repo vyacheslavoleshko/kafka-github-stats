@@ -1,6 +1,9 @@
 package rest;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.core.util.JacksonFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.SneakyThrows;
 import model.RepoStats;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.Serializer;
@@ -11,6 +14,8 @@ import org.apache.kafka.streams.state.HostInfo;
 import org.apache.kafka.streams.state.QueryableStoreTypes;
 import org.apache.kafka.streams.state.ReadOnlyKeyValueStore;
 import org.jvnet.hk2.annotations.Service;
+import serde.RepoStatsDeserializer;
+import serde.TopFiveDeserializer;
 
 import javax.inject.Inject;
 import javax.ws.rs.NotFoundException;
@@ -18,6 +23,8 @@ import javax.ws.rs.client.Client;
 import javax.ws.rs.client.ClientBuilder;
 import javax.ws.rs.core.GenericType;
 import javax.ws.rs.core.MediaType;
+import javax.ws.rs.core.Response;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.logging.Logger;
@@ -38,6 +45,8 @@ public class KafkaRestService implements GithubAnalyzerApi {
     private int thisAppPort;
 
     private final Client client = ClientBuilder.newBuilder().register(JacksonFeature.class).build();
+    private final ObjectMapper mapper = new ObjectMapper();
+    private final RepoStatsDeserializer deserializer = new RepoStatsDeserializer(new TopFiveDeserializer());
 
     public KafkaRestService() {
     }
@@ -83,16 +92,38 @@ public class KafkaRestService implements GithubAnalyzerApi {
         return repoStatsStore.get(repoName);
     }
 
+    @SneakyThrows
     private List<String> fetchUniqueRepoDataFromOtherInstance(HostInfo hostInfo, String path) {
-        return client.target(String.format("http://%s:%d/%s", hostInfo.host(), hostInfo.port(), path))
-                .request(MediaType.APPLICATION_JSON_TYPE)
-                .get(new GenericType<>() {});
+        Response response = client.target(String.format("http://%s:%d/%s", hostInfo.host(), hostInfo.port(), path))
+                .request(MediaType.TEXT_PLAIN)
+                .accept(MediaType.TEXT_PLAIN)
+                .get();
+
+        if (response.getStatus() != 200) {
+            String errorMessage = response.readEntity(String.class);
+            log.warning("Failed to fetch data from other instance. HTTP error code: " + response.getStatus() + ". Error message: " + errorMessage);
+            return new ArrayList<>();
+        }
+
+        String responseData = response.readEntity(String.class);
+        return mapper.readValue(responseData, new TypeReference<>() {});
     }
 
+    @SneakyThrows
     private RepoStats fetchRepoStatsDataFromOtherInstance(HostInfo hostInfo, String path) {
-        return client.target(String.format("http://%s:%d/%s", hostInfo.host(), hostInfo.port(), path))
-                .request(MediaType.APPLICATION_JSON_TYPE)
-                .get(new GenericType<>() {});
+        Response response = client.target(String.format("http://%s:%d/%s", hostInfo.host(), hostInfo.port(), path))
+                .request(MediaType.TEXT_PLAIN)
+                .accept(MediaType.TEXT_PLAIN)
+                .get();
+
+        if (response.getStatus() != 200) {
+            String errorMessage = response.readEntity(String.class);
+            log.warning("Failed to fetch data from other instance. HTTP error code: " + response.getStatus() + ". Error message: " + errorMessage);
+            return new RepoStats();
+        }
+
+        String responseData = response.readEntity(String.class);
+        return deserializer.deserialize("", responseData.getBytes());
     }
 
     private boolean thisHost(HostInfo hostInfo) {

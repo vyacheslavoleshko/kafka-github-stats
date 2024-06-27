@@ -6,8 +6,8 @@
       <div class="card-header">Repositories</div>
       <div class="card-body">
         <div class="input-group input-group-sm">
-          <button class="btn btn-sm btn-primary" v-for="(repo, i) in repositories" :key="i">
-            <p @click="getStats(repo)">{{repo}}</p>
+          <button @click="getStats(repo)" class="btn btn-sm btn-primary" v-for="(repo, i) in repositories" :key="i">
+            <p>{{repo}}</p>
           </button>
         </div><br/>
       </div>

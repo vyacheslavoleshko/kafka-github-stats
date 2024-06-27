@@ -2,15 +2,17 @@
 
 # Variables
 YOUR_GITHUB_TOKEN="$@"
+GITHUB_FETCHER_JAR_FILE="target/kafka-github-fetcher-1.0-SNAPSHOT.jar"
+GITHUB_ANALYZER_JAR_FILE="target/kafka-github-stats-1.0-SNAPSHOT.jar"
 
 # Run docker compose
 docker-compose up -d
 
-sleep 5
+sleep 10
 
 # Create Kafka topics
 # Create github.accounts topic
-kafka-topics.sh --create --topic github.accounts --bootstrap-server localhost:9091,localhost:9092,localhost:9093 --partitions 3 --replication-factor 3 --config cleanup.policy=compact
+kafka-topics.sh --create --topic github.accounts --bootstrap-server localhost:9091,localhost:9092,localhost:9093 --partitions 3 --replication-factor 3
 
 # Create github.commits topic
 kafka-topics.sh --create --topic github.commits --bootstrap-server localhost:9091,localhost:9092,localhost:9093 --partitions 3 --replication-factor 3 --config cleanup.policy=compact
@@ -35,16 +37,32 @@ mkdir -p finished
 cd ..
 cd github_fetcher
 mvn clean package
-java -jar target/kafka-github-fetcher-1.0-SNAPSHOT.jar $YOUR_GITHUB_TOKEN > github_fetcher1.log 2>&1 &
-java -jar target/kafka-github-fetcher-1.0-SNAPSHOT.jar $YOUR_GITHUB_TOKEN > github_fetcher2.log 2>&1 &
+# Check if Maven build was successful
+if [ $? -eq 0 ]; then
+  echo "Maven build successful. JAR file created."
+else
+  echo "Maven build failed. Check the Maven logs for details."
+  exit 1
+fi
+java -jar $GITHUB_FETCHER_JAR_FILE $YOUR_GITHUB_TOKEN > github_fetcher1.log 2>&1 &
+java -jar $GITHUB_FETCHER_JAR_FILE $YOUR_GITHUB_TOKEN > github_fetcher2.log 2>&1 &
 
 # Run GithubAnalyzer app to calculate statistics for commits
 cd ..
 cd github_stats
 mvn clean package
-java -jar target/kafka-github-stats-1.0-SNAPSHOT.jar http://localhost 8070 github_analyzer1 > github_analyzer1.log 2>&1 &
+# Check if Maven build was successful
+if [ $? -eq 0 ]; then
+  echo "Maven build successful. JAR file created."
+else
+  echo "Maven build failed. Check the Maven logs for details."
+  exit 1
+fi
+mkdir /tmp/kafka-streams/github_analyzer1
+mkdir /tmp/kafka-streams/github_analyzer2
+java -jar $GITHUB_ANALYZER_JAR_FILE http://localhost 8070 github_analyzer /tmp/kafka-streams/github_analyzer1 > github_analyzer1.log 2>&1 &
 sleep 5
-java -jar target/kafka-github-stats-1.0-SNAPSHOT.jar http://localhost 8071 github_analyzer2 > github_analyzer2.log 2>&1 &
+java -jar $GITHUB_ANALYZER_JAR_FILE http://localhost 8071 github_analyzer /tmp/kafka-streams/github_analyzer2 > github_analyzer2.log 2>&1 &
 
 # Run Frontend
 cd ..
@@ -53,8 +71,12 @@ npm install
 npm run serve > web_ui.log 2>&1 &
 
 # Post Connector configuration
-while ! curl -s http://localhost:8083/connectors; do
-  echo "Kafka Connect is not available yet. Waiting..."
+while true; do
+  response=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8083/connectors)
+  if [ "$response" -eq 200 ]; then
+    break
+  fi
+  echo "Kafka Connect is not available yet (HTTP status: $response). Waiting..."
   sleep 5
 done
 echo "Kafka Connect is available."

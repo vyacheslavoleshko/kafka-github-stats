@@ -72,6 +72,7 @@ public class GithubAnalyzer {
     public static String API_HOST = "";
     public static int API_PORT = -1;
     public static String APPLICATION_ID = "";
+    public static String STATE_DIR_PATH = "";
 
     private final static Serializer<Key> keySerializer = new KeySerializer();
     private final static Deserializer<Key> keyDeserializer = new KeyDeserializer();
@@ -98,6 +99,7 @@ public class GithubAnalyzer {
         API_HOST = args[0];
         API_PORT = Integer.parseInt(args[1]);
         APPLICATION_ID = args[2];
+        STATE_DIR_PATH = args[3];
 
         log.info("Starting KafkaStreams...");
         Properties p = new Properties();
@@ -107,14 +109,17 @@ public class GithubAnalyzer {
         p.setProperty(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, EXACTLY_ONCE_V2);
         p.setProperty(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
         p.setProperty(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
-
+        p.setProperty(StreamsConfig.STATE_DIR_CONFIG, STATE_DIR_PATH);
         KStream<Key, String> commits = builder.stream(INPUT_TOPIC, Consumed.with(keySerde, Serdes.String()));
+
         KTable<String, Long> totalCommits =
-                commits.groupByKey()
-                    .count()
-                    .toStream()
-                    .selectKey((k, v) -> k.getRepo())
-                    .toTable();
+                commits
+                        .groupByKey()
+                        .count()
+                        .toStream()
+                        .selectKey((k, v) -> k.getRepo())
+                        .peek((repo, v) -> log.info(String.format("Processing commits for %s", repo)))
+                        .toTable();
 
         totalCommits.toStream()
                 // Put all data into a single partition. This is needed to avoid querying all Kafka Streams app

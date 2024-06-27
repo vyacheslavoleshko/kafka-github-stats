@@ -3,6 +3,7 @@
 3. Top 5 - needs to gather state across all instances of Kafka streams?
 - Yes, or just re-partition into a single topic by using groupBy(STATIC_KEY)
 4. Less hassle with custom serdes?
+5. How to juggle with launching all this zoo other than with .sh scripting?
 TODO: schema registry?
 TODO: add compaction
 TODO: test GithubAnalyzer with multiple instances

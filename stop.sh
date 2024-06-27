@@ -43,3 +43,15 @@ else
 fi
 
 docker-compose down
+
+echo "Finding and deleting all files in /tmp/kafka-streams/github_analyzer1"
+find /tmp/kafka-streams/github_analyzer1 -type f -exec rm -f {} \;
+
+echo "Finding and deleting all files in /tmp/kafka-streams/github_analyzer2"
+find /tmp/kafka-streams/github_analyzer2 -type f -exec rm -f {} \;
+
+echo "Deleting /tmp/kafka-streams/github_analyzer1"
+rm -rf /tmp/kafka-streams/github_analyzer1
+
+echo "Deleting /tmp/kafka-streams/github_analyzer2"
+rm -rf /tmp/kafka-streams/github_analyzer2
