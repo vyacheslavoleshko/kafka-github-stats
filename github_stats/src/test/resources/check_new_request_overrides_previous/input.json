@@ -1,0 +1,24 @@
+[
+  {
+    "repo": "apache:cassandra",
+    "authorName": "author1",
+    "fetchRequestId": "c7cff80d-f147-4225-9da2-8674e824b729"
+  },
+  {
+    "repo": "apache:superset",
+    "authorName": "author1",
+    "fetchRequestId": "c7cff80d-f147-4225-9da2-8674e824b729"
+  },
+  {
+    "repo": "apache:superset",
+    "authorName": "author1",
+    "fetchRequestId": "c7cff80d-f147-4225-9da2-8674e824b729"
+  },
+
+  {
+    "repo": "apache:superset",
+    "authorName": "author2",
+    "fetchRequestId": "d7cff80d-f147-4225-9da2-8674e824b639"
+  }
+
+]

@@ -1,0 +1,14 @@
+[
+  {
+    "repo": "apache:cassandra",
+    "totalCommits": 3,
+    "totalCommitters": 2,
+    "topFiveContributors": [{"repo":"apache:cassandra","email":"author1","commitCount":2}, {"repo":"apache:cassandra","email":"author2","commitCount":1}]
+  },
+  {
+    "repo": "apache:superset",
+    "totalCommits": 2,
+    "totalCommitters": 1,
+    "topFiveContributors": [{"repo":"apache:superset","email":"author1","commitCount":2}]
+  }
+]

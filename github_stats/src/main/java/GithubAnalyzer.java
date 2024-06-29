@@ -61,7 +61,6 @@ import static org.apache.kafka.streams.StreamsConfig.EXACTLY_ONCE_V2;
 public class GithubAnalyzer {
 
     private static final Logger log = Logger.getLogger(GithubAnalyzer.class.getSimpleName());
-    private static final StreamsBuilder builder = new StreamsBuilder();
 
     public static final String INPUT_TOPIC = "github.commits";
     public static final String OUTPUT_TOPIC = "github.stats";
@@ -94,22 +93,11 @@ public class GithubAnalyzer {
     private final static Serde<Contributor> contributorSerde = Serdes.serdeFrom(contributorSerializer, contributorDeserializer);
 
     private static final ObjectMapper mapper = new ObjectMapper();
+    private KafkaStreams streams;
 
-    public static void main(String[] args) throws Exception {
-        API_HOST = args[0];
-        API_PORT = Integer.parseInt(args[1]);
-        APPLICATION_ID = args[2];
-        STATE_DIR_PATH = args[3];
+    public Topology createTopology() {
+        final StreamsBuilder builder = new StreamsBuilder();
 
-        log.info("Starting KafkaStreams...");
-        Properties p = new Properties();
-        p.setProperty(StreamsConfig.APPLICATION_ID_CONFIG, APPLICATION_ID);
-        p.setProperty(StreamsConfig.APPLICATION_SERVER_CONFIG,  API_HOST + ":" + API_PORT);
-        p.setProperty(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9091,localhost:9092,localhost:9093");
-        p.setProperty(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, EXACTLY_ONCE_V2);
-        p.setProperty(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
-        p.setProperty(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
-        p.setProperty(StreamsConfig.STATE_DIR_CONFIG, STATE_DIR_PATH);
         KStream<Key, String> commits = builder.stream(INPUT_TOPIC, Consumed.with(keySerde, Serdes.String()));
 
         KTable<String, Long> totalCommits =
@@ -181,20 +169,49 @@ public class GithubAnalyzer {
                         .withKeySerde(Serdes.String())
                         .withValueSerde(repoStatsSerde))
                 .toStream().to(OUTPUT_TOPIC, Produced.with(Serdes.String(), repoStatsSerde));
+        return builder.build();
+    }
 
-
-        StreamsConfig config = new StreamsConfig(p);
-        Topology topology = builder.build();
-
-        KafkaStreams streams = new KafkaStreams(topology, config);
+    private void start(StreamsConfig config) {
+        streams = new KafkaStreams(createTopology(), config);
         streams.cleanUp();
         streams.start();
+    }
+
+    private void stop() {
+        streams.close();
+    }
+
+    private KafkaStreams getStreams() {
+        return streams;
+    }
+
+    public static void main(String[] args) throws Exception {
+        API_HOST = args[0];
+        API_PORT = Integer.parseInt(args[1]);
+        APPLICATION_ID = args[2];
+        STATE_DIR_PATH = args[3];
+
+        log.info("Starting KafkaStreams...");
+        Properties p = new Properties();
+        p.setProperty(StreamsConfig.APPLICATION_ID_CONFIG, APPLICATION_ID);
+        p.setProperty(StreamsConfig.APPLICATION_SERVER_CONFIG,  API_HOST + ":" + API_PORT);
+        p.setProperty(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9091,localhost:9092,localhost:9093");
+        p.setProperty(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, EXACTLY_ONCE_V2);
+        p.setProperty(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
+        p.setProperty(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG, Serdes.String().getClass().getName());
+        p.setProperty(StreamsConfig.STATE_DIR_CONFIG, STATE_DIR_PATH);
+
+        StreamsConfig config = new StreamsConfig(p);
+
+        GithubAnalyzer githubAnalyzer = new GithubAnalyzer();
+        githubAnalyzer.start(config);
 
         WebServer webServer = new WebServer(API_HOST, API_PORT);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             log.info("Closing KafkaStreams gracefully...");
-            streams.close();
+            githubAnalyzer.stop();
             try {
                 webServer.stopWebServer();
             } catch (Exception e) {
@@ -210,7 +227,7 @@ public class GithubAnalyzer {
             @Override
             protected void configure() {
                 bind(KafkaRestService.class).to(KafkaRestService.class);
-                bind(streams).to(KafkaStreams.class);
+                bind(githubAnalyzer.getStreams()).to(KafkaStreams.class);
                 bind(API_PORT).to(Integer.class);
                 bind(API_HOST).to(String.class);
             }
