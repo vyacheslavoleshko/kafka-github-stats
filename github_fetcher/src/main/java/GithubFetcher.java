@@ -14,26 +14,16 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
-import org.kohsuke.github.GHCommit;
-import org.kohsuke.github.GHUser;
-import org.kohsuke.github.GitHubBuilder;
-import org.kohsuke.github.PagedIterator;
 
-import java.io.IOException;
 import java.time.LocalDate;
-import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.logging.Logger;
-import java.util.stream.Collectors;
 
 public class GithubFetcher {
 
@@ -42,15 +32,20 @@ public class GithubFetcher {
     private static final String BOOTSTRAP_SERVERS = "localhost:9091,localhost:9092,localhost:9093";
     private static final Logger log = Logger.getLogger(GithubFetcher.class.getSimpleName());
     private static final ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule());
-    private static GithubRestClient restClient;
+    public static final int BATCH_SIZE = 50;
 
     private static final ExecutorService messageExecutorService =
             Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() + 1);
     private static final ExecutorService githubApiExecutorService =
             Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() + 1);
-    private static final ExecutorService commitExecutorService =
-            Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() + 1);
 
+    private GithubRestClientApi restClient;
+    private KafkaProducer<String, String> producer;
+
+    public GithubFetcher(GithubRestClientApi restClient, KafkaProducer<String, String> producer) {
+        this.restClient = restClient;
+        this.producer = producer;
+    }
 
     public static void main(String[] args) {
         Properties consumerProps = new Properties();
@@ -65,13 +60,6 @@ public class GithubFetcher {
         }
         String githubToken = args[0];
         log.info("Received token: " + githubToken);
-        try {
-            restClient = new GithubRestClient(new GitHubBuilder()
-                    .withOAuthToken(githubToken)
-                    .build());
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
 
         KafkaConsumer<String, String> consumer = new KafkaConsumer<>(consumerProps);
         consumer.subscribe(Collections.singletonList(INPUT_TOPIC));
@@ -88,19 +76,19 @@ public class GithubFetcher {
             log.info("Detected a shutdown, closing Consumer and Producer gracefully...");
             messageExecutorService.shutdown();
             githubApiExecutorService.shutdown();
-            commitExecutorService.shutdown();
             producer.flush();
             producer.close();
             consumer.close();
         }));
 
+        final GithubFetcher githubFetcher = new GithubFetcher(GithubRestClient.getInstance(githubToken), producer);
         while (true) {
             ConsumerRecords<String, String> records = consumer.poll(100);
             CompletableFuture<Void>[] futures = new CompletableFuture[records.count()];
             int i = 0;
             for (ConsumerRecord<String, String> record : records) {
                 futures[i] = CompletableFuture.runAsync(
-                                () -> processFetchRequests(producer, record.value()), messageExecutorService
+                                () -> githubFetcher.processFetchRequests(record.value()), messageExecutorService
                         );
                 i++;
             }
@@ -110,60 +98,30 @@ public class GithubFetcher {
     }
 
     @SneakyThrows
-    private static void processFetchRequests(
-            KafkaProducer<String, String> producer, String fetchRequestStr
-    ) {
+    void processFetchRequests(String fetchRequestStr) {
         log.info(String.format("Start processing of FetchRequest: %s", fetchRequestStr));
         List<FetchRequest> fetchRequests = mapper.readValue(fetchRequestStr, new TypeReference<>() {});
 
         CompletableFuture<Void>[] futures = fetchRequests.stream()
                 .peek(fetchRequest -> fetchRequest.setId(UUID.randomUUID()))
                 .map(fetchRequest ->
-                        CompletableFuture.runAsync(() -> getCommitsAndSend(producer, fetchRequest), githubApiExecutorService))
+                        CompletableFuture.runAsync(() -> getCommitsAndSend(fetchRequest), githubApiExecutorService))
                 .toArray(CompletableFuture[]::new);
         CompletableFuture.allOf(futures).join();
     }
 
     @SneakyThrows
-    private static void getCommitsAndSend(KafkaProducer<String, String> producer, FetchRequest fetchRequest) {
+    private void getCommitsAndSend(FetchRequest fetchRequest) {
         log.info(String.format("%s_%s: Getting commits...", fetchRequest.owner, fetchRequest.repo));
-        var iterator = restClient.getCommits(fetchRequest.owner, fetchRequest.repo, fetchRequest.since);
-        while (iterator.hasNext()) {
-            List<Commit> commits = mapCommits(iterator.nextPage(), fetchRequest);
-            log.info(String.format("%s_%s: Fetched %s commits", fetchRequest.owner, fetchRequest.repo, commits.size()));
-            produceRecords(producer, commits, fetchRequest.getId());
-            log.info(String.format("%s_%s: Produced %s messages", fetchRequest.owner, fetchRequest.repo, commits.size()));
-        }
+        restClient.processCommitsInBatches(fetchRequest, BATCH_SIZE, this::produceRecords);
     }
 
-    private static List<Commit> mapCommits(List<GHCommit> commits, FetchRequest req) {
-        CompletableFuture<Commit>[] futures = commits.stream()
-                .map(commit -> CompletableFuture.supplyAsync(() -> fetchCommitDetails(req.owner, req.repo, commit, req.id), commitExecutorService))
-                .toArray(CompletableFuture[]::new);
-        CompletableFuture.allOf(futures).join();
-
-        List<Commit> result = new ArrayList<>();
-        for (CompletableFuture<Commit> future : futures) {
-            result.add(future.join());
-        }
-        return result;
-    }
-
-    @SneakyThrows
-    private static Commit fetchCommitDetails(String owner, String repo, GHCommit commit, UUID fetchRequestId) {
-        GHUser author = commit.getAuthor();
-        String name = "unknown" + UUID.randomUUID();
-        if (author != null) name = author.getLogin();
-        return new Commit(owner + ":" + repo, name, fetchRequestId);
-    }
-
-    private static void produceRecords(
-            KafkaProducer<String, String> producer, List<Commit> commits, UUID fetchRequestId) {
+     private void produceRecords(List<Commit> commits) {
         commits.forEach(commit -> {
             // Key is composed of unique repo name + unique ID of fetch request. By including ID when calculating
             // statistics downstream we perform GROUP BY for the particular FetchRequest only. If the data for the same
             // owner + repo data has been already fetched before, it will be overridden.
-            String key = commit.getRepo() + ":" + fetchRequestId;
+            String key = commit.getRepo() + ":" + commit.getFetchRequestId();
             try {
                 producer.send(new ProducerRecord<>(OUTPUT_TOPIC, key, mapper.writeValueAsString(commit)));
             } catch (JsonProcessingException e) {
@@ -173,7 +131,7 @@ public class GithubFetcher {
     }
 
     @Data
-    private static class FetchRequest {
+    static class FetchRequest {
 
         private String owner;
         private String repo;
@@ -183,7 +141,7 @@ public class GithubFetcher {
 
     @Data
     @AllArgsConstructor
-    private static class Commit {
+    static class Commit {
 
         String repo;  // in the format of owner:repoName
         String authorName;

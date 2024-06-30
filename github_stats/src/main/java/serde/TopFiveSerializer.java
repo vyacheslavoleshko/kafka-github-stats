@@ -35,41 +35,4 @@ public class TopFiveSerializer implements Serializer<TopFiveContributors> {
     public void close() {
     }
 
-    public static void main(String[] args) {
-        TopFiveSerializer t = new TopFiveSerializer();
-        var contributors = Arrays.asList(
-                new ContributorWithCount("repo2", "email2.gmail.com", 2L),
-                new ContributorWithCount("repo1", "email.gmail.com", 3L),
-                new ContributorWithCount("repo3", "email.gmail.com", 1L),
-                new ContributorWithCount("repo3", "email.gmail.com", 5L),
-                new ContributorWithCount("repo3", "email.gmail.com", 0L),
-                new ContributorWithCount("repo3", "email.gmail.com", 1L),
-                new ContributorWithCount("repo3", "email.gmail.com", 11L),
-                new ContributorWithCount("repo3", "email.gmail.com", -1L)
-        );
-        TopFiveContributors topFive = new TopFiveContributors();
-
-        for (var c : contributors) {
-            topFive.add(c);
-        }
-
-        for (ContributorWithCount c : topFive) {
-            System.out.println("first" + c);
-        }
-
-        for (ContributorWithCount c : topFive) {
-            System.out.println("sec" + c);
-        }
-        System.out.println("--------------------");
-        byte[] bytes = t.serialize("", topFive);
-        TopFiveContributors topFiveDeserialized = new TopFiveDeserializer().deserialize("", bytes);
-        for (ContributorWithCount c : topFiveDeserialized) {
-            System.out.println("3" + c);
-        }
-
-        for (ContributorWithCount c : topFiveDeserialized) {
-            System.out.println("4" + c);
-        }
-        System.out.println(new String(bytes));
-    }
 }

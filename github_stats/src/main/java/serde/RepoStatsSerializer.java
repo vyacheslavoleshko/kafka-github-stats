@@ -39,20 +39,4 @@ public class RepoStatsSerializer implements Serializer<RepoStats> {
     public void close() {
     }
 
-    public static void main(String[] args) {
-        RepoStats r = new RepoStats();
-        r.setRepo("repository");
-        r.setTotalCommits(3);
-        r.setTotalCommitters(2);
-        TopFiveContributors t = new TopFiveContributors();
-        t.add(new ContributorWithCount("repository", "email1@mail", 1L));
-        t.add(new ContributorWithCount("repository", "email2@mail", 2L));
-        r.setTopFiveContributors(t);
-
-        byte[] serialized = new RepoStatsSerializer(new TopFiveSerializer()).serialize("", r);
-        System.out.println(new String(serialized));
-        RepoStatsDeserializer deserializer = new RepoStatsDeserializer(new TopFiveDeserializer());
-        RepoStats deserialized = deserializer.deserialize("", serialized);
-        System.out.println(deserialized);
-    }
 }
