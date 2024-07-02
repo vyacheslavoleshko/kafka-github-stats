@@ -1,25 +1,12 @@
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.jaxrs.json.JacksonJaxbJsonProvider;
-import lombok.Data;
-import lombok.EqualsAndHashCode;
 import lombok.SneakyThrows;
 import model.Contributor;
 import model.ContributorWithCount;
 import model.Key;
 import model.RepoStats;
-import org.apache.kafka.streams.kstream.Consumed;
-import org.glassfish.hk2.utilities.binding.AbstractBinder;
-import org.glassfish.jersey.server.ResourceConfig;
-import rest.GithubAnalyzerRestService;
-import rest.KafkaRestService;
-import rest.WebServer;
-import serde.KeyDeserializer;
-import serde.KeySerializer;
-import serde.RepoStatsDeserializer;
-import serde.RepoStatsSerializer;
+import model.TopFiveContributors;
 import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
@@ -30,13 +17,22 @@ import org.apache.kafka.streams.KeyValue;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.Topology;
+import org.apache.kafka.streams.kstream.Consumed;
 import org.apache.kafka.streams.kstream.Grouped;
 import org.apache.kafka.streams.kstream.KStream;
 import org.apache.kafka.streams.kstream.KTable;
 import org.apache.kafka.streams.kstream.Materialized;
 import org.apache.kafka.streams.kstream.Produced;
 import org.apache.kafka.streams.state.KeyValueStore;
-import model.TopFiveContributors;
+import org.glassfish.hk2.utilities.binding.AbstractBinder;
+import org.glassfish.jersey.server.ResourceConfig;
+import rest.GithubAnalyzerRestService;
+import rest.KafkaRestService;
+import rest.WebServer;
+import serde.KeyDeserializer;
+import serde.KeySerializer;
+import serde.RepoStatsDeserializer;
+import serde.RepoStatsSerializer;
 import serde.TopFiveDeserializer;
 import serde.TopFiveSerializer;
 import utils.src.main.java.serde.SimpleObjectDeserializer;
@@ -48,16 +44,21 @@ import javax.ws.rs.container.ContainerResponseFilter;
 import javax.ws.rs.ext.Provider;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
 import java.util.logging.Logger;
 
-import static org.apache.kafka.streams.StreamsConfig.APPLICATION_ID_CONFIG;
 import static org.apache.kafka.streams.StreamsConfig.EXACTLY_ONCE_V2;
 
+/**
+ * Kafka Streams application to calculate statistics on Github commits.
+ * All the aggregations are done first by the (repo + fetchRequestId), then by (repo).
+ * It is done to maintain idempotency. For example, if a commit data for a repository fetched once, and then another
+ * request for the same repository comes in, we want to avoid mixing up results, and rather completely override
+ * the output. By aggregating with (repo + fetchRequestId) where fetchRequestId is unique, we calculate data across
+ * the request, and then aggregate once again by repo to override the result.
+ */
 public class GithubAnalyzer {
 
     private static final Logger log = Logger.getLogger(GithubAnalyzer.class.getSimpleName());

@@ -7,13 +7,11 @@ import lombok.SneakyThrows;
 import model.RepoStats;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.Serializer;
-import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.KeyQueryMetadata;
 import org.apache.kafka.streams.state.HostInfo;
 import org.apache.kafka.streams.state.QueryableStoreTypes;
 import org.apache.kafka.streams.state.ReadOnlyKeyValueStore;
-import org.jvnet.hk2.annotations.Service;
 import serde.RepoStatsDeserializer;
 import serde.TopFiveDeserializer;
 
@@ -21,7 +19,6 @@ import javax.inject.Inject;
 import javax.ws.rs.NotFoundException;
 import javax.ws.rs.client.Client;
 import javax.ws.rs.client.ClientBuilder;
-import javax.ws.rs.core.GenericType;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 import java.util.ArrayList;
@@ -32,6 +29,9 @@ import java.util.stream.Collectors;
 
 import static org.apache.kafka.streams.StoreQueryParameters.fromNameAndType;
 
+/**
+ * Service to expose Kafka local state store data.
+ */
 public class KafkaRestService implements GithubAnalyzerApi {
 
     private static final Logger log = Logger.getLogger(KafkaRestService.class.getSimpleName());

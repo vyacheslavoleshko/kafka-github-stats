@@ -6,9 +6,9 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.SneakyThrows;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
@@ -25,6 +25,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.logging.Logger;
 
+/**
+ * Reads config from input topic, fetches data about commits from Github API and sends
+ * the data to the output topic.
+ */
 public class GithubFetcher {
 
     private static final String INPUT_TOPIC = "github.accounts";
@@ -39,8 +43,8 @@ public class GithubFetcher {
     private static final ExecutorService githubApiExecutorService =
             Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors() + 1);
 
-    private GithubRestClientApi restClient;
-    private KafkaProducer<String, String> producer;
+    private final GithubRestClientApi restClient;
+    private final KafkaProducer<String, String> producer;
 
     public GithubFetcher(GithubRestClientApi restClient, KafkaProducer<String, String> producer) {
         this.restClient = restClient;
@@ -103,7 +107,7 @@ public class GithubFetcher {
         List<FetchRequest> fetchRequests = mapper.readValue(fetchRequestStr, new TypeReference<>() {});
 
         CompletableFuture<Void>[] futures = fetchRequests.stream()
-                .peek(fetchRequest -> fetchRequest.setId(UUID.randomUUID()))
+                .peek(fetchRequest -> fetchRequest.setId(UUID.randomUUID())) // assign unique ID to the request
                 .map(fetchRequest ->
                         CompletableFuture.runAsync(() -> getCommitsAndSend(fetchRequest), githubApiExecutorService))
                 .toArray(CompletableFuture[]::new);

@@ -20,6 +20,9 @@ import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 
+/**
+ *
+ */
 public class GithubRestClient implements GithubRestClientApi {
 
     private static final Logger log = Logger.getLogger(GithubRestClient.class.getSimpleName());

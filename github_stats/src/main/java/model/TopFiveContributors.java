@@ -9,6 +9,9 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.PriorityQueue;
 
+/**
+ * Class to keep Top-5 contributors based on their commits count.
+ */
 public class TopFiveContributors implements Iterable<ContributorWithCount> {
 
     private final Comparator<ContributorWithCount> ASC_COMPARATOR =
