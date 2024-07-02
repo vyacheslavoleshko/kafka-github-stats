@@ -21,7 +21,7 @@ import java.util.function.Consumer;
 import java.util.logging.Logger;
 
 /**
- *
+ * Rest client that uses org.kohsuke.github to access GitHub API.
  */
 public class GithubRestClient implements GithubRestClientApi {
 

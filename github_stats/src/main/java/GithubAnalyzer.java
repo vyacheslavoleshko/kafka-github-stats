@@ -110,6 +110,7 @@ public class GithubAnalyzer {
                         .peek((repo, v) -> log.info(String.format("Processing commits for %s", repo)))
                         .toTable();
 
+        // Compute all GitHub repositories and store them as a single partition within one of the app instances
         totalCommits.toStream()
                 // Put all data into a single partition. This is needed to avoid querying all Kafka Streams app
                 // instances to gather the entire state.
@@ -134,6 +135,7 @@ public class GithubAnalyzer {
                         .selectKey((k, v) -> k.getRepo())
                         .toTable();
 
+        // Calculate Top-5 contributors per repo
         contributorCount
                 .mapValues((contributor, commitCount) ->
                         new ContributorWithCount(
@@ -208,6 +210,7 @@ public class GithubAnalyzer {
         GithubAnalyzer githubAnalyzer = new GithubAnalyzer();
         githubAnalyzer.start(config);
 
+        // Expose state store data via REST API with embedded server
         WebServer webServer = new WebServer(API_HOST, API_PORT);
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
