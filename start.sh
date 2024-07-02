@@ -8,23 +8,6 @@ GITHUB_ANALYZER_JAR_FILE="target/kafka-github-stats-1.0-SNAPSHOT.jar"
 # Run docker compose
 docker-compose up -d
 
-sleep 10
-
-# Create Kafka topics
-# Create github.accounts topic
-kafka-topics.sh --create --topic github.accounts --bootstrap-server localhost:9091,localhost:9092,localhost:9093 --partitions 3 --replication-factor 3
-
-# Create github.commits topic
-kafka-topics.sh --create --topic github.commits --bootstrap-server localhost:9091,localhost:9092,localhost:9093 --partitions 3 --replication-factor 3 --config cleanup.policy=compact
-
-# Create github.stats topic
-kafka-topics.sh --create --topic github.stats --bootstrap-server localhost:9091,localhost:9092,localhost:9093 --partitions 3 --replication-factor 3 --config cleanup.policy=compact
-
-# Create Kafka Connect topics
-kafka-topics.sh --create --topic connect-configs --bootstrap-server localhost:9091,localhost:9092,localhost:9093 --replication-factor 3 --partitions 1 --config cleanup.policy=compact
-kafka-topics.sh --create --topic connect-offsets --bootstrap-server localhost:9091,localhost:9092,localhost:9093 --replication-factor 3 --partitions 50 --config cleanup.policy=compact
-kafka-topics.sh --create --topic connect-status --bootstrap-server localhost:9091,localhost:9092,localhost:9093 --replication-factor 3 --partitions 10 --config cleanup.policy=compact
-
 cd directory_reader
 
 # Create directories if they do not exist
@@ -32,11 +15,50 @@ mkdir -p sourcedir
 mkdir -p errors
 mkdir -p finished
 
+sleep 10
+
+# Function to create Kafka topics
+create_kafka_topic() {
+    local container_name=$1
+    local topic_name=$2
+    local partitions=$3
+    local replication_factor=$4
+    local compact=$5
+
+    echo "Creating Kafka topic: $topic_name for [$container_name]"
+
+    if [ "$compact" = "true" ]; then
+        docker exec $container_name kafka-topics \
+            --create \
+            --topic $topic_name \
+            --partitions $partitions \
+            --replication-factor $replication_factor \
+            --bootstrap-server INTERNAL://broker-2:29092 \
+            --config cleanup.policy=compact
+    else
+        docker exec $container_name kafka-topics \
+            --create \
+            --topic $topic_name \
+            --partitions $partitions \
+            --replication-factor $replication_factor \
+            --bootstrap-server INTERNAL://broker-2:29092
+    fi
+}
+
+# Create Kafka topics
+# Create github.accounts topic
+create_kafka_topic "broker-2" "github.accounts" 3 3 "false"
+create_kafka_topic "broker-2" "github.commits" 3 3 "true"
+create_kafka_topic "broker-2" "github.stats" 3 3 "true"
+create_kafka_topic "broker-2" "connect-configs" 1 3 "true"
+create_kafka_topic "broker-2" "connect-offsets" 50 3 "true"
+create_kafka_topic "broker-2" "connect-status" 10 3 "true"
+
 # Run applications
 # Run GithubFetcher app to retrieve github commit data
 cd ..
 cd github_fetcher
-mvn clean package
+mvn clean package -Dmaven.test.skip=true
 # Check if Maven build was successful
 if [ $? -eq 0 ]; then
   echo "Maven build successful. JAR file created."
@@ -50,7 +72,7 @@ java -jar $GITHUB_FETCHER_JAR_FILE $YOUR_GITHUB_TOKEN > github_fetcher2.log 2>&1
 # Run GithubAnalyzer app to calculate statistics for commits
 cd ..
 cd github_stats
-mvn clean package
+mvn clean package -Dmaven.test.skip=true
 # Check if Maven build was successful
 if [ $? -eq 0 ]; then
   echo "Maven build successful. JAR file created."
@@ -58,8 +80,6 @@ else
   echo "Maven build failed. Check the Maven logs for details."
   exit 1
 fi
-mkdir /tmp/kafka-streams/github_analyzer1
-mkdir /tmp/kafka-streams/github_analyzer2
 java -jar $GITHUB_ANALYZER_JAR_FILE http://localhost 8070 github_analyzer /tmp/kafka-streams/github_analyzer1 > github_analyzer1.log 2>&1 &
 sleep 5
 java -jar $GITHUB_ANALYZER_JAR_FILE http://localhost 8071 github_analyzer /tmp/kafka-streams/github_analyzer2 > github_analyzer2.log 2>&1 &

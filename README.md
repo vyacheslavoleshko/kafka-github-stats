@@ -48,10 +48,12 @@ File example:
   }
 ]
 ```
-For provided GitHub repositories calculated statistics can be found on
+- For provided GitHub repositories calculated statistics is available at
 http://localhost:8082/
 
 Statistics example:
 - Total number of commits
 - Total number of contributors
 - Top-5 contributors and their commits count
+
+Kafka UI is available at http://localhost:8080/

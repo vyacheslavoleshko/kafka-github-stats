@@ -53,7 +53,7 @@ export default {
 
         if (!res.ok) {
           const message = `An error has occured: ${res.status} - ${res.statusText}`;
-          throw new Error(message);
+          this.repositories = [];
         }
 
         const data = await res.json();
